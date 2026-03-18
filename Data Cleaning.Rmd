@@ -1,0 +1,74 @@
+```{r}
+# Load R packages for data cleaning 
+library(tidyverse)
+library(janitor)
+library(readxl)
+```
+
+```{r}
+# Read in TIGER Gene Panel
+genes <- read_excel("TIGER2_gene panel.xlsx") %>%
+  select(Genes = "ADA") # Rename column ADA to Genes
+```
+
+```{r}
+# Read in Total HLH Patient Data
+data <- read_excel("Patient Data /HLH_data.xlsx", sheet = "TOTAL")
+
+# Clean data
+data <- data %>%
+  slice(1:112) %>%
+  mutate(Perforin_expression_percent = as.numeric(`Perforin expression %`)) %>%
+  mutate(sex = as.factor(Sex)) %>%
+  mutate(Result_clean = case_when(
+      str_detect(Result, regex("pol.*ism", ignore_case = TRUE)) ~ "Polymorphism",
+      str_detect(Result, regex("mu.*tion found", ignore_case = TRUE))            ~ "Mutation",
+      str_detect(Result, regex("sequence var", ignore_case = TRUE))              ~ "Sequence variance",
+      str_detect(Result, regex("no (mutation|pathogenic|clearly)", ignore_case = TRUE)) ~ "No mutation",
+      str_detect(Result, regex("no result|no data", ignore_case = TRUE))         ~ "No data",
+      is.na(Result) ~ NA_character_,
+      TRUE ~ Result)) %>%
+  clean_names()
+```
+
+```{r}
+# Remove columns
+data_clean <- data %>%
+  rename(`Perforin Expression %` = perforin_expression_percent_2) %>%
+  rename('Patient ID' = id) %>% # Rename column id to Patient ID
+  select(-"parent_nationality", -"familial_disease", -"parental_consanguinity", -"dob", 
+         -"episode_number", -"age", -"coll_date", -"rec_date", -"source", -"location",
+         -"clinician", -"test_set_name", -"result", -"mutation", -"perforin_expression_percent",
+         -"perforin_code", -"peak_mfi", -"gra", -"s_cd25_pg_ml", -"perforin_expression",
+         -('hemoglobin_g_l':'treatment_applied'),
+         -"sex_2", -"result_clean") %>%
+  mutate(across(starts_with("c_"), as.numeric)) %>% # Convert SNPs to numerical vector rather than factor
+  filter(if_all(starts_with("c_"), ~!is.na(.))) %>% # Filter for patients with SNP data
+  mutate(`Perforin Expression %` = 
+           if_else(`Patient ID` == 91, 0.56, `Perforin Expression %`)) %>% # Impute for missing data
+  mutate(`Perforin Expression %` = 
+           if_else(`Patient ID` == 103, 0.22, `Perforin Expression %`)) %>%# Impute for missing data
+  mutate(`Perforin Expression %` =
+           if_else(`Patient ID` == 21, 0.19, `Perforin Expression %`)) # Impute for missing data
+```
+
+```{r}
+mean_abnormal <- data %>%
+  filter(perforin_expression == "Abnormal") %>%
+  summarise(m = mean(perforin_expression_percent_2, na.rm = TRUE)) %>%
+  pull(m)
+```
+
+```{r}
+# Filter for HLH-diagnosed patients
+patients_hlh <- data_clean %>%
+  filter(diagnosis == "HLH")
+
+# Filter for patients with an empty diagnosis
+patients_unknown <- data_clean %>%
+  filter(is.na(diagnosis))
+
+# Filter for patients with non-HLH diagnosis
+patients_non <- data_clean %>%
+  filter(!is.na(diagnosis), diagnosis != "HLH")
+```

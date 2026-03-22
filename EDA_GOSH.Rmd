@@ -5,7 +5,6 @@ library(ggplot2)
 library(FactoMineR)
 library(factoextra)
 library(patchwork)
-library(skimr)
 library(ggpubr)
 library(gtsummary)
 library(dendextend)
@@ -90,7 +89,7 @@ snp_scaled <- scale(snp_matrix_clean)
 combined <- cbind(snp_scaled, perforin_scaled)
 
 # Run PCA on the combined matrix
-pca_combined <- prcomp(combined, scale. = FALSE, center = FALSE)
+pca_combined <- prcomp(combined, scale. = FALSE, center = FALSE) 
 ```
 
 ```{r}

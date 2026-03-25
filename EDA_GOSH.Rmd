@@ -102,9 +102,11 @@ pca_combined <- prcomp(combined, scale. = FALSE, center = FALSE)
 p_scree <- fviz_eig(
   pca_snp,
   addlabels = TRUE,
-  ylim       = c(0, 20),
-  main       = "SNP alone",
-  barcolor   = "black")
+  ylim = c(0, 20),
+  main = "SNP alone",
+  barcolor = "black",
+  barfill = "steelblue",
+  ggtheme = theme_minimal())
 
 plot(p_scree)
 ```
@@ -114,10 +116,11 @@ plot(p_scree)
 scree_combined <- fviz_eig(
   pca_combined,
   addlabels = TRUE,
-  ylim       = c(0, 20),
-  main       = "SNP + Perforin",
-  barfill    = "#2166AC",
-  barcolor   = "black")
+  ylim = c(0, 20),
+  main = "SNP + Perforin",
+  barfill = "steelblue",
+  barcolor = "black",
+  ggtheme = theme_minimal())
 
 plot(scree_combined)
 ```
@@ -126,40 +129,40 @@ plot(scree_combined)
 # Plot both 
 p_scree + scree_combined +
   plot_annotation(tag_levels = "A",
-                  title = "Scree Plot: Variance explained per PC (SNP alone vs Combined)")
+                  title = "Scree Plot: Variance explained per PC")
 ```
 
 ```{r}
-# Biplot of the SNP-only PCA matrix
+# Plot of the SNP-only PCA matrix
 p_pca <- fviz_pca_ind(
   pca_snp,
-  geom.ind   = "point",
-  col.ind    = data_labelled$diagnosis_group,
-  palette    = c("#B2182B", "#2166AC", "#808080"),
+  geom.ind = "point",
+  col.ind = data_labelled$diagnosis_group,
+  palette = c("#B2182B", "#2166AC", "#808080"),
   addEllipses = TRUE,
   ellipse.type = "confidence",
   ellipse.level = 0.95,
   legend.title = "Diagnosis",
-  pointsize    = 2,
-  title        = "PCA of SNPs by diagnosis") +
+  pointsize = 2,
+  title = "SNPs by Diagnosis") +
   theme_minimal(base_size = 13)
 
 plot(p_pca)
 ```
 
 ```{r}
-# Biplot of the combined PCA matrix
+# Plot of the combined PCA matrix
 combined_pca <- fviz_pca_ind(
   pca_combined,
-  geom.ind   = "point",
-  col.ind    = data_labelled$diagnosis_group,
-  palette    = c("#B2182B", "#2166AC", "#808080"),
+  geom.ind = "point",
+  col.ind = data_labelled$diagnosis_group,
+  palette = c("#B2182B", "#2166AC", "#808080"),
   addEllipses = TRUE,
   ellipse.type = "confidence",
   ellipse.level = 0.95,
   legend.title = "Diagnosis",
-  pointsize    = 2,
-  title        = "PCA by diagnosis (Combined)") +
+  pointsize = 2,
+  title = "SNPs and Perforin Expression by Diagnosis") +
   theme_minimal(base_size = 13)
 
 plot(combined_pca)
@@ -175,12 +178,12 @@ p_pca + combined_pca +
 # How much does each SNP contribute to PCs 1 and 2?
 p_contrib <- fviz_contrib(
   pca_snp,
-  choice   = "var",
-  axes     = 1:2,
-  top      = 15,
-  fill     = "#F4A582",
-  color    = "black",
-  title    = "SNP contributions to PC1 & PC2")
+  choice = "var",
+  axes = 1:2,
+  top = 15,
+  fill = "orange",
+  color = "black",
+  title = "SNPs")
 
 plot(p_contrib)
 ```
@@ -188,12 +191,12 @@ plot(p_contrib)
 ```{r}
 contrib_combined <- fviz_contrib(
   pca_combined,
-  choice   = "var",
-  axes     = 1:2,
-  top      = 15,
-  fill     = "#F4A582",
-  color    = "black",
-  title    = "Contributions to PC1 & PC2 (Combined)")
+  choice = "var",
+  axes = 1:2,
+  top = 15,
+  fill = "orange",
+  color = "black",
+  title = "SNPs + Perforin Expression")
 
 plot(contrib_combined)
 ```
@@ -205,6 +208,7 @@ p_contrib + contrib_combined +
 ```
 
 ```{r}
+# Create dataframe of PC loadings from the SNP PCA matrix
 loadings_df <- as.data.frame(pca_snp$rotation[, 1:2]) %>%
   rownames_to_column("snp") %>%
   arrange(desc(abs(PC1)))
@@ -212,17 +216,16 @@ loadings_df <- as.data.frame(pca_snp$rotation[, 1:2]) %>%
 loadings_snp <- ggplot(loadings_df, aes(x = reorder(snp, PC1), y = PC1)) +
   geom_col(fill = "#2166AC") +
   coord_flip() +
-  labs(
-    title = "SNP Loadings on PC1",
+  labs(title = "SNPs",
     x = "SNP",
-    y = "Loading"
-  ) +
+    y = "Loading") +
   theme_minimal()
 
 plot(loadings_snp)
 ```
 
 ```{r}
+# Create dataframe of PC loadings from the combined PCA matrix
 loadings_combined <- as.data.frame(pca_combined$rotation[, 1:2]) %>%
   rownames_to_column("feature") %>%
   arrange(desc(abs(PC1)))
@@ -231,11 +234,9 @@ loadings_combined <- ggplot(loadings_combined, aes(x = reorder(feature, PC1), y 
   geom_col(aes(fill = feature == "perforin_scaled"), show.legend = FALSE) +
   scale_fill_manual(values = c("TRUE" = "#D73027", "FALSE" = "#2166AC")) +
   coord_flip() +
-  labs(
-    title = "Feature Loadings on PC1 (SNPs + Perforin)",
+  labs(title = "SNPs + Perforin Expression",
     x = "Feature",
-    y = "Loading"
-  ) +
+    y = "Loading") +
   theme_minimal()
 
 plot(loadings_combined)
@@ -256,31 +257,30 @@ colnames(heatmap_matrix) <- as.character(data_labelled$`Patient ID`)
 
 # Ensure row names and column names match
 col_annotation <- data.frame(
-  Diagnosis = data_labelled$diagnosis_group,
-  row.names = as.character(data_labelled$`Patient ID`)
-)
+  Diagnosis = data_labelled$diagnosis_group, 
+  Expression = data_labelled$`Perforin Expression %`,
+  row.names = as.character(data_labelled$`Patient ID`))
 
 # Choose colours for annotation
 # Annotation colours
 ann_colours <- list(
-  Diagnosis = c("HLH" = "#B2182B", "Non-HLH" = "#2166AC", "Unknown" = "#808080")
-)
+  Diagnosis = c("HLH" = "#B2182B", "Non-HLH" = "#2166AC", "Unknown" = "#808080"))
 
 # Plot the heatmap
 pheatmap(
   heatmap_matrix,
-  annotation_col     = col_annotation,
-  annotation_colors  = ann_colours,
-  clustering_method   = "ward.D2", # Clustering method
-  cluster_rows        = TRUE,
-  cluster_cols        = TRUE,# Allow the data to cluster itself
-  color              = colorRampPalette(c("#454545", "#ABD9E9", "#D73027"))(3),
-  breaks             = c(-0.5, 0.5, 1.5, 2.5),
-  legend_breaks      = c(0, 1, 2),
-  legend_labels      = c("0", "1", "2"),
-  fontsize_row       = 8,
-  fontsize_col       = 6,
-  show_colnames      = FALSE,
-  main               = "SNP Genotype Heatmap by Diagnosis",
-  border_color       = NA)
+  annotation_col = col_annotation,
+  annotation_colors = ann_colours,
+  clustering_method = "ward.D2", # Clustering method
+  cluster_rows = TRUE,
+  cluster_cols = TRUE, # Allow the data to cluster itself
+  color = colorRampPalette(c("#454545", "#ABD9E9", "#D73027"))(3),
+  breaks = c(-0.5, 0.5, 1.5, 2.5),
+  legend_breaks = c(0, 1, 2),
+  legend_labels = c("0", "1", "2"),
+  fontsize_row = 8,
+  fontsize_col = 6,
+  show_colnames = FALSE,
+  main = "Heatmap of SNPs by Diagnosis",
+  border_color = NA)
 ```

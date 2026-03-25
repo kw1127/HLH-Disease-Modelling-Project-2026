@@ -282,6 +282,5 @@ pheatmap(
   fontsize_col       = 6,
   show_colnames      = FALSE,
   main               = "SNP Genotype Heatmap by Diagnosis",
-  border_color       = NA        
-  )
+  border_color       = NA)
 ```

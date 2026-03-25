@@ -6,7 +6,6 @@ library(FactoMineR)
 library(factoextra)
 library(patchwork)
 library(ggpubr)
-library(gtsummary)
 library(dendextend)
 ```
 
@@ -48,6 +47,11 @@ ggplot(data_labelled, aes(diagnosis_group, `Perforin Expression %`,
         axis.title.y = element_text(margin = margin(r = 10))
         )
 ```
+# Median perforin expression of the HLH group is lower than the non-HLH and Unknown group. This is consistent with the expected biology of HLH. Mutations to PRF1 is a defining characteristic of FHL2.
+
+# However, there are no significant differences in perforin expression between the three patient groups. This could be due to the limited sample size of both the non-HLH and Unknown patient groups.
+
+# A number of patients (n=31) had to be omitted due to no available SNP data. Perforin expression data were imputed for three patients.
 
 ```{r}
 # Create matrix of SNPs
@@ -55,7 +59,8 @@ snp_matrix <- data_labelled %>%
   select(all_of(snp_cols)) %>%
   as.data.frame()
 
-# Check which SNPs have zero variance
+# Some SNPs may have no variance in the dataset (i.e. no patient has the SNP) and thus are not insightful.
+# Check which of these SNPs have zero variance
 zero_var <- sapply(snp_matrix, var, na.rm = TRUE)
 names(zero_var[zero_var == 0])
 
@@ -73,19 +78,19 @@ perforin_matrix <- data_labelled %>%
   select(all_of(perforin_cols)) %>%
   as.data.frame()
 
-# Check which expression has zero variance
+# Check which patient's perforin expression has zero variance
 zero_var_perf <- sapply(perforin_matrix, var, na.rm = TRUE)
 
-# Remove
+# Remove the zero-variance expression profiles
 perforin_clean <- perforin_matrix[, zero_var_perf > 0]
 
-# Scale
+# Scale the data
 perforin_scaled <- scale(perforin_clean)
 
-# Scale
+# Scale the data
 snp_scaled <- scale(snp_matrix_clean)
 
-# Combine into one matrix
+# Combine into one matrix using cbind()
 combined <- cbind(snp_scaled, perforin_scaled)
 
 # Run PCA on the combined matrix
@@ -125,6 +130,7 @@ p_scree + scree_combined +
 ```
 
 ```{r}
+# Biplot of the SNP-only PCA matrix
 p_pca <- fviz_pca_ind(
   pca_snp,
   geom.ind   = "point",
@@ -142,6 +148,7 @@ plot(p_pca)
 ```
 
 ```{r}
+# Biplot of the combined PCA matrix
 combined_pca <- fviz_pca_ind(
   pca_combined,
   geom.ind   = "point",
@@ -165,7 +172,7 @@ p_pca + combined_pca +
 ```
 
 ```{r}
-# How does each SNP contribute to variation?
+# How much does each SNP contribute to PCs 1 and 2?
 p_contrib <- fviz_contrib(
   pca_snp,
   choice   = "var",
@@ -264,10 +271,10 @@ pheatmap(
   heatmap_matrix,
   annotation_col     = col_annotation,
   annotation_colors  = ann_colours,
-  clustering_method   = "ward.D2",
+  clustering_method   = "ward.D2", # Clustering method
   cluster_rows        = TRUE,
-  cluster_cols        = FALSE,
-  color              = colorRampPalette(c("#4575B4", "#ABD9E9", "#D73027"))(3),
+  cluster_cols        = TRUE,# Allow the data to cluster itself
+  color              = colorRampPalette(c("#454545", "#ABD9E9", "#D73027"))(3),
   breaks             = c(-0.5, 0.5, 1.5, 2.5),
   legend_breaks      = c(0, 1, 2),
   legend_labels      = c("0", "1", "2"),

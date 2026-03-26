@@ -6,7 +6,6 @@ library(FactoMineR)
 library(factoextra)
 library(patchwork)
 library(ggpubr)
-library(dendextend)
 ```
 
 ```{r}
@@ -47,11 +46,6 @@ ggplot(data_labelled, aes(diagnosis_group, `Perforin Expression %`,
         axis.title.y = element_text(margin = margin(r = 10))
         )
 ```
-# Median perforin expression of the HLH group is lower than the non-HLH and Unknown group. This is consistent with the expected biology of HLH. Mutations to PRF1 is a defining characteristic of FHL2.
-
-# However, there are no significant differences in perforin expression between the three patient groups. This could be due to the limited sample size of both the non-HLH and Unknown patient groups.
-
-# A number of patients (n=31) had to be omitted due to no available SNP data. Perforin expression data were imputed for three patients.
 
 ```{r}
 # Create matrix of SNPs
@@ -179,7 +173,7 @@ p_pca + combined_pca +
 p_contrib <- fviz_contrib(
   pca_snp,
   choice = "var",
-  axes = 1:2,
+  axes = 1:2, 
   top = 15,
   fill = "orange",
   color = "black",
@@ -192,7 +186,7 @@ plot(p_contrib)
 contrib_combined <- fviz_contrib(
   pca_combined,
   choice = "var",
-  axes = 1:2,
+  axes = 1:2, 
   top = 15,
   fill = "orange",
   color = "black",
@@ -249,31 +243,30 @@ loadings_snp + loadings_combined +
 ```
 
 ```{r}
-# Create heatmap matrix
+# Create heatmap matrix.
 heatmap_matrix <- t(snp_matrix_clean)
 
-# Set patient IDs as column names
+# Set patient IDs as column names.
 colnames(heatmap_matrix) <- as.character(data_labelled$`Patient ID`)
 
-# Ensure row names and column names match
+# Ensure row names and column names match.
 col_annotation <- data.frame(
   Diagnosis = data_labelled$diagnosis_group, 
   Expression = data_labelled$`Perforin Expression %`,
   row.names = as.character(data_labelled$`Patient ID`))
 
-# Choose colours for annotation
-# Annotation colours
+# Choose colours for annotation.
 ann_colours <- list(
   Diagnosis = c("HLH" = "#B2182B", "Non-HLH" = "#2166AC", "Unknown" = "#808080"))
 
-# Plot the heatmap
-pheatmap(
+# Plot the heatmap.
+p <- pheatmap(
   heatmap_matrix,
   annotation_col = col_annotation,
   annotation_colors = ann_colours,
-  clustering_method = "ward.D2", # Clustering method
+  clustering_method = "ward.D2", # Clustering method.
   cluster_rows = TRUE,
-  cluster_cols = TRUE, # Allow the data to cluster itself
+  cluster_cols = TRUE, # Allow the data to cluster itself.
   color = colorRampPalette(c("#454545", "#ABD9E9", "#D73027"))(3),
   breaks = c(-0.5, 0.5, 1.5, 2.5),
   legend_breaks = c(0, 1, 2),
@@ -283,4 +276,75 @@ pheatmap(
   show_colnames = FALSE,
   main = "Heatmap of SNPs by Diagnosis",
   border_color = NA)
+
+p
+```
+
+```{r}
+# Create the heatmap plot.
+p2 <- pheatmap(
+  heatmap_matrix,
+  annotation_col = col_annotation,
+  annotation_colors = ann_colours,
+  clustering_method = "ward.D2", # Clustering method.
+  cluster_rows = TRUE,
+  cluster_cols = TRUE, # Allow the data to cluster itself.
+  color = colorRampPalette(c("#454545", "#ABD9E9", "#D73027"))(3),
+  breaks = c(-0.5, 0.5, 1.5, 2.5),
+  legend_breaks = c(0, 1, 2),
+  legend_labels = c("0", "1", "2"),
+  fontsize_row = 8,
+  fontsize_col = 6,
+  show_colnames = FALSE,
+  main = "Heatmap of SNPs by Diagnosis",
+  border_color = NA,
+  cutree_cols = 6) # Number of visual clusters.
+
+p2
+```
+
+```{r}
+patient_clusters <- cutree(p2$tree_col, k = 6)
+
+# Summary dataframe of each patient in each cluster.
+summary_patients <- col_annotation %>%
+  tibble::rownames_to_column("patient") %>%
+  mutate(cluster = as.factor(patient_clusters[patient])) %>%
+  arrange(factor(cluster, levels = c("1", "2", "3", "4", "5", "6")))
+```
+
+```{r}
+# Perforin expression is a biologically-influenced continuous variable, thus does not follow a normal distribution.
+# To see if perforin expression is different between each patient cluster, we cannot use the One-Way ANOVA.
+# Instead, use the non-parametric analog, the Kruskal-Wallis rank sum test.
+kruskal_expression <- kruskal.test(Expression ~ cluster, 
+                                   data = summary_patients) 
+
+# To test which cluster is significantly different in perforin expression from another, perform the Dunn's test.
+library(FSA) # Load FSA package for Dunn's test.
+dunn_expression <- dunnTest(Expression ~ cluster,
+                            data = summary_patients,
+                            method = "bonferroni", # Multiple hypothesis testing correction.
+                            two.sided = TRUE)
+```
+
+```{r}
+# Recreate heatmap using the patient clusters 
+ggplot(summary_patients, aes(cluster,
+                             Expression,
+                             fill = cluster)) +
+       geom_boxplot(outlier.shape = NULL, alpha = 0.5) +
+       geom_jitter(aes(
+         shape = Diagnosis,
+         colour = Diagnosis),
+         width = 0.1,
+         size = 2) +
+  scale_colour_manual(values = c("HLH" = "#D73027",
+                                 "Non-HLH" = "#ABD9E9",
+                                 "Unknown" = "#454545")) +
+  stat_compare_means(method = "kruskal.test",
+                     label.y = 85) +
+  labs(x = "Patient Cluster", y = "Perforin Expression",
+       title = "Perforin Expression by Patient Cluster") +
+  theme_classic()
 ```

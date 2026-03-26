@@ -16,10 +16,11 @@ data <- data %>%
   mutate(sex = as.factor(Sex)) %>% # Change factor
   mutate(Result_clean = case_when(
       str_detect(Result, regex("pol.*ism", ignore_case = TRUE)) ~ "Polymorphism",
-      str_detect(Result, regex("mu.*tion found", ignore_case = TRUE))            ~ "Mutation",
-      str_detect(Result, regex("sequence var", ignore_case = TRUE))              ~ "Sequence variance",
-      str_detect(Result, regex("no (mutation|pathogenic|clearly)", ignore_case = TRUE)) ~ "No mutation",
-      str_detect(Result, regex("no result|no data", ignore_case = TRUE))         ~ "No data",
+      str_detect(Result, regex("mu.*tion found", ignore_case = TRUE)) ~ "Mutation",
+      str_detect(Result, regex("sequence var", ignore_case = TRUE)) ~ "Sequence variance",
+      str_detect(Result, regex("no (mutation|pathogenic|clearly)", 
+                               ignore_case = TRUE)) ~ "No mutation",
+      str_detect(Result, regex("no result|no data", ignore_case = TRUE)) ~ "No data",
       is.na(Result) ~ NA_character_,
       TRUE ~ Result)) %>% # Fix spelling mistakes 
   clean_names()
@@ -65,10 +66,9 @@ data_clean <- data_clean %>%
 ```{r}
 data_labelled <- data_clean %>%
   mutate(diagnosis_group = case_when(
-    diagnosis == "HLH"         ~ "HLH",
-    is.na(diagnosis)           ~ "Unknown",
-    TRUE                       ~ "Non-HLH"
-  )) %>%
+    diagnosis == "HLH" ~ "HLH",
+    is.na(diagnosis) ~ "Unknown",
+    TRUE ~ "Non-HLH")) %>%
   mutate(diagnosis_group = factor(diagnosis_group,
                                   levels = c("HLH", "Non-HLH", "Unknown"))) %>%
   select(-"sex", -"diagnosis") %>%

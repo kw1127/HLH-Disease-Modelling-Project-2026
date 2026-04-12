@@ -6,6 +6,7 @@ library(FactoMineR)
 library(factoextra)
 library(patchwork)
 library(ggpubr)
+library(corrplot)
 ```
 
 ```{r}
@@ -219,6 +220,22 @@ plot(loadings_snp)
 ```
 
 ```{r}
+# Correlation plot to see why a specific SNP dominates PC1
+# Create correlation matrix using the SNP PCA matrix from before
+cor_matrix = cor(snp_matrix_clean, method = "spearman")
+snp_correlation <- corrplot(cor_matrix, 
+                            method = "square", 
+                            type = "full", 
+                            order = "hclust",
+                            hclust.method = "ward.D2",
+                            tl.cex = 0.75,
+                            tl.col = "black",
+                            sig.level = 0.05,
+                            mar = c(0, 0, 0, 0),
+                            title = "Spearman Correlation plot of SNPs", line = -1)
+```
+
+```{r}
 # Create dataframe of PC loadings from the combined PCA matrix
 loadings_combined <- as.data.frame(pca_combined$rotation[, 1:2]) %>%
   rownames_to_column("feature") %>%
@@ -315,8 +332,8 @@ summary_patients <- col_annotation %>%
 
 ```{r}
 # Perforin expression is a biologically-influenced continuous variable, thus does not follow a normal distribution.
-# To see if perforin expression is different between each patient cluster, we cannot use the One-Way ANOVA.
-# Instead, use the non-parametric analog, the Kruskal-Wallis rank sum test.
+# To see if perforin expression is different between each patient cluster, we cannot use the One-Way ANOVA, which assumes a normal variation.
+# Instead, use the non-parametric variant, the Kruskal-Wallis rank sum test.
 kruskal_expression <- kruskal.test(Expression ~ cluster, 
                                    data = summary_patients) 
 
@@ -329,7 +346,7 @@ dunn_expression <- dunnTest(Expression ~ cluster,
 ```
 
 ```{r}
-# Recreate heatmap using the patient clusters 
+# Recreate the heatmap using the patient-specific clusters 
 ggplot(summary_patients, aes(cluster,
                              Expression,
                              fill = cluster)) +
@@ -343,7 +360,7 @@ ggplot(summary_patients, aes(cluster,
                                  "Non-HLH" = "#ABD9E9",
                                  "Unknown" = "#454545")) +
   stat_compare_means(method = "kruskal.test",
-                     label.y = 85) +
+                     label.y = 85) + # Can I do multiple testing?
   labs(x = "Patient Cluster", y = "Perforin Expression",
        title = "Perforin Expression by Patient Cluster") +
   theme_classic()

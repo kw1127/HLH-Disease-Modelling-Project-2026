@@ -12,7 +12,7 @@ data <- read_excel("Patient Data /HLH_data.xlsx", sheet = "TOTAL")
 # Initial data cleaning
 data <- data %>%
   slice(1:112) %>% # Only keep the patient data
-  mutate(Perforin_expression_percent = as.numeric(`Perforin expression %`)) %>%
+  mutate(Perforin_expression_percent = as.numeric(`Perforin expression %`)) %>% # Ensure perforin expression is right class
   mutate(sex = as.factor(Sex)) %>% # Change factor
   mutate(Result_clean = case_when(
       str_detect(Result, regex("pol.*ism", ignore_case = TRUE)) ~ "Polymorphism",
@@ -27,6 +27,7 @@ data <- data %>%
 ```
 
 ```{r}
+# Create new object
 # Remove columns
 data_clean <- data %>%
   rename(`Perforin Expression %` = perforin_expression_percent_2) %>% # Rename column name 
@@ -42,13 +43,13 @@ data_clean <- data %>%
   
 # Calculate average perforin expression for abnormal expression (patient 21)
 mean_abnormal <- data %>%
-  filter(perforin_expression == "Abnormal") %>%
-  summarise(m = mean(perforin_expression_percent_2, na.rm = TRUE)) %>%
+  filter(perforin_expression == "Abnormal") %>% # Only consider patients whose expression is abnormal
+  summarise(m = mean(perforin_expression_percent_2, na.rm = TRUE)) %>% 
   pull(m)
 
 # Calculate average perforin expression for suboptimal expression (patient 103)
 mean_suboptimal <- data %>%
-  filter(perforin_expression == "Suboptimal") %>%
+  filter(perforin_expression == "Suboptimal") %>% # Only consider patients whose expression is suboptimal.
   summarise(m = mean(perforin_expression_percent_2, na.rm = TRUE)) %>%
   pull(m)
 
@@ -60,10 +61,11 @@ data_clean <- data_clean %>%
            if_else(`Patient ID` == 103, 0.52, `Perforin Expression %`)) %>% # Impute for missing data
   mutate(`Perforin Expression %` =
            if_else(`Patient ID` == 21, 0.19, `Perforin Expression %`)) %>% # Impute for missing data
-  mutate(`Perforin Expression %` = `Perforin Expression %` * 100)
+  mutate(`Perforin Expression %` = `Perforin Expression %` * 100) # Convert expression to a percentage
 ```
 
 ```{r}
+# Create a new object for patients labelled accordingly
 data_labelled <- data_clean %>%
   mutate(diagnosis_group = case_when(
     diagnosis == "HLH" ~ "HLH",

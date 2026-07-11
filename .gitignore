@@ -1,1 +1,6 @@
 .Rproj.user/
+.positai
+*.rds
+*.h5
+azimuth/
+.DS_Store

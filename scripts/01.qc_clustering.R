@@ -1,5 +1,3 @@
-source("scripts/00_setup.R")
-
 # Import PBMC data
 counts <- Read10X_h5("~/Documents/HLH Disease Modelling Project 2026/SC3_v3_NextGem_SI_PBMC_10K_filtered_feature_bc_matrix.h5")
 

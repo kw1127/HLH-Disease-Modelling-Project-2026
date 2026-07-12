@@ -1,11 +1,4 @@
-# Cell type annotation: SingleR + manual gd T refinement
-# In:  01_clustered.rds
-# Out: 02_annotated.rds, markers
-
-source("scripts/00_setup.R")
-
-seurat <- readRDS(file.path(data_proc, "01_clustered.rds"))
-
+# Cell type annotation: SingleR + manual γδ T refinement
 # SingleR annotation; compare two references
 expr <- GetAssayData(seurat, layer = "data")
 
@@ -21,6 +14,9 @@ seurat$celltype_monaco <- pred_monaco$labels
 # Monaco resolves DCs that DICE absorbs into monocytes
 table(seurat$celltype_dice, seurat$celltype_monaco)
 table(seurat$RNA_snn_res.0.3, seurat$celltype_monaco)
+
+DimPlot(seurat, group.by = "celltype_dice", label = TRUE,
+        label.size = 3, repel = TRUE) + NoLegend()
 
 DimPlot(seurat, group.by = "celltype_monaco", label = TRUE, 
         label.size = 3, repel = TRUE) + NoLegend()
@@ -43,7 +39,7 @@ seurat_filt <- subset(seurat, idents = keep)
 table(Idents(seurat_filt))
 
 umap_ct <- DimPlot(seurat_filt, label = TRUE, repel = TRUE) + NoLegend()
-ggsave(file.path(fig_dir, "umap_celltypes.pdf"), umap_ct, width = 7, height = 6)
+ggsave("umap_celltypes.pdf", umap_ct, width = 7, height = 6)
 
 # Markers per cell type (evidence for annotation)
 markers <- FindAllMarkers(seurat_filt, only.pos = TRUE,
@@ -52,6 +48,3 @@ markers <- FindAllMarkers(seurat_filt, only.pos = TRUE,
 top10 <- markers %>%
   group_by(cluster) %>%
   slice_max(n = 10, order_by = avg_log2FC)
-
-saveRDS(seurat_filt, file.path(data_proc, "02_annotated.rds"))
-saveRDS(markers, file.path(data_proc, "02_markers.rds"))

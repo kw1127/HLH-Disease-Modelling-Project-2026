@@ -1,37 +1,55 @@
-ct <- "NK cells"
+# BUild CARNIVAL inputs
+# NOTE: CARNIVAL's preprocessPriorKnowledgeNetwork() renames PKN columns
+# positionally -- colnames(pkn) <- c("Node1", "Sign", "Node2") -- so the
+# column order must be source, interaction, target. Wrong column order scrambles
+# the network silently, with no error being thrown.
 
-tf_meas <- df %>%
-  dplyr::filter(celltype == ct,
-                source %in% c(pkn_list[[ct]]$source, pkn_list[[ct]]$target)) %>%
-  dplyr::select(source, mean) %>%
-  tibble::deframe()
+ko_genes  <- c("PRF1", "RAB27A", "STX11", "STXBP2", "SH2D1A", "XIAP")
+# UNC13D and LYST have no regulators in CollecTRI, so they cannot enter the network
 
-ko_val  <- min(tf_meas)
-meas_ko <- c(tf_meas, setNames(ko_val, "PRF1"))
+celltypes <- c("NK cells", "gdT cells", "CD8+ T cells")
+tags <- c("NK", "gdT", "CD8T")
 
-saveRDS(pkn_list[[ct]], "pkn_NK.rds")
-saveRDS(tf_meas, "NK_baseline_measurements.rds")
-saveRDS(meas_ko, "NK_koPRF1_measurements.rds")
+for (i in seq_along(celltypes)) {
+  
+  ct  <- celltypes[i]
+  tag <- tags[i]
+  
+  pkn_ct <- pkn_list[[ct]]
+  nodes  <- c(pkn_ct$source, pkn_ct$target)
+  
+  saveRDS(pkn_ct, sprintf("pkn_%s.rds", tag))
+  
+  # Baseline: measured TF activities
+  tf_meas <- df %>%
+    dplyr::filter(celltype == ct, source %in% nodes) %>%
+    dplyr::select(source, mean) %>%
+    tibble::deframe()
+  
+  saveRDS(tf_meas, sprintf("%s_baseline_measurements.rds", tag))
+  
+  # Knockout value scaled to the TF range
+  ko_val <- min(tf_meas)
+  
+  # One knockout per HLH gene present in this cell type's network
+  for (gene in ko_genes) {
+    
+    if (!gene %in% nodes) {
+      cat(tag, ":", gene, "not in network, skipped\n")
+      next
+    }
+    
+    meas_ko <- c(tf_meas[names(tf_meas) != gene],
+                 setNames(ko_val, gene))
+    
+    saveRDS(meas_ko, sprintf("%s_ko%s_measurements.rds", tag, gene))
+  }
+  
+  cat(tag, ":", nrow(pkn_ct), "edges,", length(tf_meas), "TFs\n")
+}
 
-# confirm before uploading
-head(readRDS("pkn_NK.rds"))   # source | interaction | target
+# Confirm column order before uploading
+sapply(list.files(pattern = "^pkn_.*\\.rds$"), 
+       function(f) paste(colnames(readRDS(f)), collapse = ", "))
 
-
-# ---- Why the KO run failed ----
-# CARNIVAL silently dropped PRF1 from the measurements,
-# along with ~78 of the 192 TFs. So the baseline and KO runs solved the identical
-# problem and returned the same objective.
-#
-# From carnival_pilot.err:
-#   Warning: These measurement nodes are not in prior knowledge network and
-#   will be ignored: ARID3A | ATF6 | ... | TBX21 | ... | ZNF148 | PRF1
-#
-# The reason is that PRF1 has no outgoing edges, so CARNIVAL cannot place it
-# on a path from a perturbation to a measurement.
-
-pkn_list[[ct]] %>% dplyr::filter(target == "PRF1")   # 11 incoming edges
-pkn_list[[ct]] %>% dplyr::filter(source == "PRF1")   # 0 outgoing edges
-
-# The dropped TFs are sinks for the same reason
-sinks_nk <- setdiff(pkn_list[[ct]]$target, pkn_list[[ct]]$source)
-c("PRF1", "TBX21", "GATA3", "RUNX1", "RELB", "TCF7") %in% sinks_nk
+list.files(pattern = "measurements\\.rds$")

@@ -1,13 +1,4 @@
 # Prior knowledge network: signalling + transcriptional layers, coupled
-# In:  02_annotated.rds, 03_tf_by_celltype.rds, 03_collectri.rds
-# Out: 04_pkn.rds, 04_pkn_list.rds, Fig 3
-
-source("scripts/00_setup.R")
-
-seurat_filt <- readRDS(file.path(data_proc, "02_annotated.rds"))
-df <- readRDS(file.path(data_proc, "03_tf_by_celltype.rds"))
-net <- readRDS(file.path(data_proc, "03_collectri.rds"))
-
 Idents(seurat_filt) <- "celltype_final"
 
 # Import prior knowledge network
@@ -71,6 +62,12 @@ igraph::V(g)$name[igraph::shortest_paths(g, from = "IL12RB1",
                                          to = "PRF1", mode = "out")$vpath[[1]]]
 
 # --- Cell-type-specific PKNs ---
+expressed <- function(obj, ct, min_pct = 0.1) {
+  cells <- WhichCells(obj, idents = ct)
+  cnt   <- GetAssayData(obj, assay = "RNA", layer = "counts")[, cells]
+  rownames(cnt)[Matrix::rowMeans(cnt > 0) >= min_pct]
+}
+
 pkn_list <- lapply(celltypes, function(ct) {
   g <- expressed(seurat_filt, ct)
   pkn %>% dplyr::filter(source %in% g, target %in% g)
@@ -91,9 +88,6 @@ nk_only <- pkn_list[["NK cells"]] %>%
   dplyr::filter(!paste(source, target) %in% cd8_edges)
 
 nk_only %>% dplyr::filter(target == "PRF1")   # ELF4 -> PRF1, EOMES -> PRF1
-
-saveRDS(pkn, file.path(data_proc, "04_pkn.rds"))
-saveRDS(pkn_list, file.path(data_proc, "04_pkn_list.rds"))
 
 # --- Fig 3: TF activity of effector-gene regulators ---
 tf_map <- net %>%
@@ -124,5 +118,5 @@ pheatmap(hlh_mat,
          annotation_col = tf_annot,
          annotation_colors = annot_colors,
          main = "TF activity: regulators of PRF1 and RAB27A",
-         filename = file.path(fig_dir, "fig3_hlh_regulator_heatmap.pdf"),
+         filename = "fig3_hlh_regulator_heatmap.pdf",
          width = 10, height = 5)

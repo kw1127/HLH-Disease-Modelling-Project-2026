@@ -4,9 +4,8 @@ Idents(seurat_filt) <- "celltype_final"
 # Import prior knowledge network
 ppi <- omnipath_interactions()
 
-# Signalling layer: directed and unambiguously signed
-# curation_effort >= 2 chosen: >=3 loses the IL12RB1 -> PRF1 path,
-# >=1 gives 70k edges (intractable for the ILP solver)
+# Signalling layer: directed and signed
+# curation_effort >= 2 chosen: >=3, >= 2 removes important HLH paths, >=1 gives 70k edges 
 sig <- ppi %>%
   dplyr::filter(consensus_direction == 1,
                 consensus_stimulation + consensus_inhibition == 1,   
@@ -17,18 +16,17 @@ sig <- ppi %>%
                 interaction) %>%
   dplyr::distinct()
 
-# --- KEY FINDING: HLH genes cannot serve as CARNIVAL input nodes ---
-hlh[hlh %in% c(sig$source, sig$target)]                          # 5 of 8 present
-sig %>% dplyr::filter(source %in% hlh) %>% dplyr::count(source)  # 3 have outgoing edges
+# --- HLH genes cannot be used as input nodes ---
+hlh[hlh %in% c(sig$source, sig$target)] # 4 of 8 present
 
-#   PRF1, UNC13D, RAB27A -- absent from signalling layer (terminal effectors)
+sig %>% 
+  dplyr::filter(source %in% hlh) %>% 
+  dplyr::count(source) # 2 have outgoing edges
+
+#   PRF1, UNC13D, RAB27A, LYST -- absent from signalling layer (terminal effectors)
 #   STX11, SH2D1A  -- sinks, no outgoing edges
 #   STXBP2 -- 1 outgoing edge, reaches 0 TFs
 #   LYST, XIAP -- only viable sources, and both monocyte-enriched
-#
-# Reason: HLH genes are effectors of cytotoxic granule exocytosis. They execute
-# the terminal step of the pathway and do not signal onward, so they have no
-# outgoing edges. CARNIVAL propagates perturbations forward -- nothing to propagate.
 
 # Couple signalling with transcriptional layer (TF -> HLH gene),
 # so HLH genes enter the network as downstream endpoints, not inputs

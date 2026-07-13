@@ -4,7 +4,7 @@
 # column order must be source, interaction, target. Wrong column order scrambles
 # the network silently, with no error being thrown.
 
-ko_genes  <- c("PRF1", "RAB27A", "STX11", "STXBP2", "SH2D1A", "XIAP")
+ko_genes <- c("PRF1", "RAB27A", "STX11", "STXBP2", "SH2D1A", "XIAP")
 # UNC13D and LYST have no regulators in CollecTRI, so they cannot enter the network
 
 celltypes <- c("NK cells", "gdT cells", "CD8+ T cells")
@@ -20,7 +20,7 @@ for (i in seq_along(celltypes)) {
   
   saveRDS(pkn_ct, sprintf("pkn_%s.rds", tag))
   
-  # Baseline: measured TF activities
+  # Baseline TF activities
   tf_meas <- df %>%
     dplyr::filter(celltype == ct, source %in% nodes) %>%
     dplyr::select(source, mean) %>%
@@ -31,7 +31,7 @@ for (i in seq_along(celltypes)) {
   # Knockout value scaled to the TF range
   ko_val <- min(tf_meas)
   
-  # One knockout per HLH gene present in this cell type's network
+  # One knockout per HLH gene present in this cell type
   for (gene in ko_genes) {
     
     if (!gene %in% nodes) {

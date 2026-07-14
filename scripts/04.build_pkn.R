@@ -101,7 +101,10 @@ pkn <- dplyr::bind_rows(sig, trn) %>%
   dplyr::distinct() %>%
   dplyr::select(source, interaction, target)
 
-dim(pkn)                                  # 14,989 edges
+dim(pkn)                  # 14,989 edges
+
+saveRDS(pkn, "pkn_full.rds")
+
 hlh[hlh %in% c(pkn$source, pkn$target)]   # 6 of 8
 
 # UNC13D and LYST have no regulators in CollecTRI either
@@ -139,11 +142,11 @@ igraph::V(g)$name[igraph::shortest_paths(g, from = "IL12RB1",
                                          to = "PRF1", mode = "out")$vpath[[1]]]
 
 
-# ---- Cell-type-specific PKNs ----
+# ---- Cell-type-specific PKN ----
 # An edge cannot be active if the protein is not expressed in that cell type
 expressed <- function(obj, ct, min_pct = 0.1) {
   cells <- WhichCells(obj, idents = ct)
-  cnt   <- GetAssayData(obj, assay = "RNA", layer = "counts")[, cells]
+  cnt <- GetAssayData(obj, assay = "RNA", layer = "counts")[, cells]
   rownames(cnt)[Matrix::rowMeans(cnt > 0) >= min_pct]
 }
 
@@ -151,7 +154,7 @@ pkn_list <- lapply(celltypes, function(ct) {
   genes <- expressed(seurat_filt, ct)
   pkn %>% 
     dplyr::filter(source %in% genes, target %in% genes) %>%
-    dplyr::select(source, interaction, target)   # CARNIVAL needs this column order
+    dplyr::select(source, interaction, target)  
 })
 
 names(pkn_list) <- celltypes
@@ -161,15 +164,17 @@ sapply(pkn_list, function(p) "PRF1" %in% c(p$source, p$target))
 
 sapply(pkn_list, function(p) paste(colnames(p), collapse = ", "))
 
-# PRF1 is a sink in the NK network too
-pkn_list[["NK cells"]] %>% dplyr::filter(target == "PRF1")   # 11 incoming
-pkn_list[["NK cells"]] %>% dplyr::filter(source == "PRF1")   # 0 outgoing
+# PRF1 is a sink in the NK network 
+pkn_list[["NK cells"]] %>% 
+  dplyr::filter(target == "PRF1")   
+
+pkn_list[["NK cells"]] %>% 
+  dplyr::filter(source == "PRF1")   
 
 
 # ---- EOMES -> PRF1 is NK-specific ----
 # EOMES and ELF4 are not expressed above threshold in healthy CD8 T cells,
-# so these edges get pruned out. Explains why naive CD8 T cells lack perforin
-# while NK cells express it
+# so these edges get pruned out. 
 cd8_edges <- paste(pkn_list[["CD8+ T cells"]]$source,
                    pkn_list[["CD8+ T cells"]]$target)
 

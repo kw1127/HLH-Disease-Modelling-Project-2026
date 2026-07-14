@@ -46,3 +46,22 @@ for (ct in c("NK", "gdT", "CD8T")) {
     }
   }
 }
+
+# Is the TF programme disrupted by PRF1 knockout?
+tfs <- c("EOMES", "RUNX3", "STAT4", "STAT3", "STAT1", "ELF4", "TBX21", "PRF1")
+
+for (ct in c("NK", "gdT", "CD8T")) {
+  b <- readRDS(file.path(res_dir,
+                         sprintf("%s_baseline_carnival_result.rds", ct)))$nodesAttributes
+  k <- readRDS(file.path(res_dir,
+                         sprintf("%s_koPRF1_carnival_result.rds", ct)))$nodesAttributes
+  
+  cat("\n---", ct, "---\n")
+  for (t in tfs) {
+    bv <- b$AvgAct[b$Node == t]
+    kv <- k$AvgAct[k$Node == t]
+    if (length(bv) && length(kv)) {
+      cat(sprintf("%-8s %6s -> %6s\n", t, bv, kv))
+    }
+  }
+}

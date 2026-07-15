@@ -22,25 +22,26 @@ sig <- ppi %>%
 nrow(sig)
 
 
-# ---- HLH genes cannot serve as CARNIVAL input nodes ----
+# HLH genes cannot serve as CARNIVAL input nodes
 
 # Which are in the signalling layer at all?
-hlh[hlh %in% c(sig$source, sig$target)]     # 4 of 8
+hlh[hlh %in% c(sig$source, sig$target)]  
 
 # Which are absent entirely?
-setdiff(hlh, c(sig$source, sig$target))     # PRF1, UNC13D, LYST, RAB27A
+setdiff(hlh, c(sig$source, sig$target))     
 
 # Which have outgoing edges? A source node needs these to propagate a perturbation
 sig %>% 
   dplyr::filter(source %in% hlh) %>% 
-  dplyr::count(source)                      # STXBP2 (1), XIAP (5)
+  dplyr::count(source)                      
 
 # Which are sinks? Sinks have regulators but regulate nothing
-intersect(hlh, setdiff(sig$target, sig$source))   # STX11, SH2D1A
+intersect(hlh, setdiff(sig$target, sig$source)) 
 
 # Of the two with outgoing edges, do they reach any of the measured TFs?
 # A source that reaches no measurements contributes nothing to the solution
-g_sig <- igraph::graph_from_data_frame(sig %>% dplyr::select(source, target),
+g_sig <- igraph::graph_from_data_frame(sig %>% 
+                                         dplyr::select(source, target),
                                        directed = TRUE)
 
 tfs_measured <- df %>%
@@ -55,13 +56,12 @@ for (s in intersect(hlh, sig$source)) {
 
 # Summary:
 #   PRF1, UNC13D, LYST, RAB27A  absent from the signalling layer
-#   STX11, SH2D1A               present but sinks, no outgoing edges
-#   STXBP2                      1 outgoing edge
-#   XIAP                        5 outgoing edges, but monocyte/DC enriched, not NK/T
+#   STX11, SH2D1A are present but sinks, no outgoing edges
+#   STXBP2 has 1 outgoing edge
+#   XIAP has 5 outgoing edges, but monocyte and DC-enriched, not NK/T
 #
 # The HLH genes are effectors of cytotoxic granule exocytosis. They carry out the
 # final step of the pathway and do not signal onward, so they have no outgoing edges.
-
 
 # ---- Is this a filtering artefact, or structural? ----
 
@@ -77,10 +77,11 @@ all_int %>%
   dplyr::filter(source_genesymbol == "PRF1") %>%
   dplyr::select(target_genesymbol, is_directed, is_stimulation,
                 is_inhibition, curation_effort, n_references)
-#   PRF1 -> CTSB    signed, but curation_effort 0 and 0 references
-#   PRF1 -> CDK2    signed, but curation_effort 0 and 0 references
-#   PRF1 -> MTOR    unsigned
-#   PRF1 -> PRKCA   unsigned
+
+#   PRF1 -> CTSB signed, but curation_effort 0 and 0 references
+#   PRF1 -> CDK2 signed, but curation_effort 0 and 0 references
+#   PRF1 -> MTOR unsigned
+#   PRF1 -> PRKCA unsigned
 
 # Same check across all 8 HLH genes
 all_int %>%
@@ -181,7 +182,8 @@ cd8_edges <- paste(pkn_list[["CD8+ T cells"]]$source,
 nk_only <- pkn_list[["NK cells"]] %>%
   dplyr::filter(!paste(source, target) %in% cd8_edges)
 
-nk_only %>% dplyr::filter(target == "PRF1")   # ELF4 -> PRF1, EOMES -> PRF1
+nk_only %>% 
+  dplyr::filter(target == "PRF1")   # ELF4 -> PRF1, EOMES -> PRF1
 
 
 # ---- Fig 3: TF activity of effector-gene regulators ----

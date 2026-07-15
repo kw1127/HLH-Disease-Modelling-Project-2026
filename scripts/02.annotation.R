@@ -21,7 +21,7 @@ DimPlot(seurat, group.by = "celltype_dice", label = TRUE,
 DimPlot(seurat, group.by = "celltype_monaco", label = TRUE, 
         label.size = 3, repel = TRUE) + NoLegend()
 
-# Manual refinement: cluster 5 = γδ T cells (TRGC2 log2FC 5.4; PRF1, GZMA, NKG7)
+# Manual check: cluster 5 = γδ T cells (TRGC2 log2FC 5.4; PRF1, GZMA, NKG7)
 # Monaco leaves these as generic "T cells" -- γδ T are neither CD4 nor CD8
 FindMarkers(seurat, ident.1 = 5, only.pos = TRUE) %>% head(15)
 

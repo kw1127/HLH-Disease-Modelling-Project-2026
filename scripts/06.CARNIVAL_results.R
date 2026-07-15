@@ -12,7 +12,7 @@ for (ct in c("NK", "gdT", "CD8T")) {
   }
 }
 
-# ---- Resolved changes per knockout (pruned grid) ----
+# Resolved changes per knockout (pruned grid)
 for (ct in c("NK", "gdT", "CD8T")) {
   
   b <- readRDS(file.path(res_dir, sprintf("%s_baseline_carnival_result.rds", ct)))$nodesAttributes
@@ -34,7 +34,7 @@ for (ct in c("NK", "gdT", "CD8T")) {
   }
 }
 
-# ---- TF programme under PRF1 knockout ----
+# TF programme under PRF1 knockout 
 tfs <- c("PRF1", "EOMES", "RUNX3", "STAT4", "STAT3", "STAT1", "ELF4", "TBX21")
 for (ct in c("NK", "gdT", "CD8T")) {
   b <- readRDS(file.path(res_dir, sprintf("%s_baseline_carnival_result.rds", ct)))$nodesAttributes
@@ -46,15 +46,19 @@ for (ct in c("NK", "gdT", "CD8T")) {
   }
 }
 
-# ---- Unpruned gdT / PRF1 comparison ----
+# Unpruned gdT / PRF1 comparison
 b <- readRDS(file.path(res_dir, "gdTfull_baseline_carnival_result.rds"))$nodesAttributes
 k <- readRDS(file.path(res_dir, "gdTfull_koPRF1_carnival_result.rds"))$nodesAttributes
 
 m <- full_join(
-  b %>% select(Node, bz = ZeroAct, bu = UpAct, bd = DownAct, base = AvgAct),
-  k %>% select(Node, kz = ZeroAct, ku = UpAct, kd = DownAct, ko = AvgAct),
-  by = "Node") %>%
+  b %>% 
+    select(Node, bz = ZeroAct, bu = UpAct, bd = DownAct, base = AvgAct),
+  k %>% 
+    select(Node, kz = ZeroAct, ku = UpAct, kd = DownAct, ko = AvgAct),
+  by = "Node") %>% 
   mutate(across(c(base, ko), as.numeric)) %>%
   filter(resolved(bz, bu, bd), resolved(kz, ku, kd), abs(ko - base) >= 50, Node != "PRF1")
 
-print(m %>% select(Node, base, ko) %>% arrange(desc(abs(ko - base))), n = 50)
+print(m %>% 
+        select(Node, base, ko) %>% 
+        arrange(desc(abs(ko - base))), n = 50)

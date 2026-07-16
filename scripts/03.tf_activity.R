@@ -140,6 +140,8 @@ hlh <- factor(hlh, levels = hlh)
 
 DefaultAssay(seurat_filt) <- "RNA"
 
+# Plot mean expression of HLH-associated genes across the cell types
+# Separate the fHL-associated genes from the other primary HLH genes
 dot_hlh <- DotPlot(seurat_filt, features = levels(hlh)) +
   RotatedAxis() +
   labs(title = "Expression of primary HLH-associated genes across cell types",
@@ -148,8 +150,51 @@ dot_hlh <- DotPlot(seurat_filt, features = levels(hlh)) +
   theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
         axis.text.x = element_text(size = 10,), 
         axis.text.y = element_text(size = 10),
-        legend.title = element_text(size = 9))
+        legend.title = element_text(size = 9)) + 
+  geom_vline(xintercept = c(4.5, 6.5), linetype = "dashed", colour = "grey70")
 
 ggsave("hlh_gene_expression_dotplot.png", dot_hlh, width = 8, height = 5)
 
-# also plot mean TF activity per cell type similar to above
+# Mean TF activity per cell type of top 50 TFs
+DefaultAssay(seurat_filt) <- "tfsulm"
+
+dot_tfs <- DotPlot(seurat_filt, features = top_tfs) +
+  RotatedAxis() +
+  labs(title = "Mean activity of the top 50 TFs across cell types",
+       x = "Transcription factor",
+       y = "Cell type") +
+  theme(axis.text.x = element_text(size = 7)) +
+  scale_colour_gradient2(
+    low = "#2166AC",      # repressed (negative activity) 
+    mid = "white",        # zero - no activity
+    high = "#B2182B",     # active (positive activity) 
+    midpoint = 0,
+    name = "Mean activity"
+  )       
+
+ggsave("tf_activity_dotplot.png", dot_tfs, width = 16, height = 5)
+
+# Top 5 TFs per cell type by mean activity
+top_per_type <- df %>%
+  group_by(celltype) %>%
+  slice_max(mean, n = 5, with_ties = FALSE) %>% 
+  pull(source) %>%
+  unique()
+
+DefaultAssay(seurat_filt) <- "tfsulm"
+
+dot_tfs_focused <- DotPlot(seurat_filt, features = top_per_type) +
+  RotatedAxis() +
+  scale_colour_gradient2(low = "#2166AC", 
+                         mid = "white", 
+                         high = "#B2182B",
+                         midpoint = 0, 
+                         name = "Mean activity") +
+  labs(title = "Mean activity of the top cell-type-defining TFs",
+       x = "Transcription factor",
+       y = "Cell type") +
+  theme(plot.title  = element_text(size = 12, face = "bold"),
+        axis.text.x = element_text(size = 9),
+        axis.text.y = element_text(size = 10))
+
+ggsave("tf_activity_dotplot_focused.png", dot_tfs_focused, width = 10, height = 5)

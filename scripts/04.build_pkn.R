@@ -156,53 +156,60 @@ hlh_table <- tibble::tibble(Gene = hlh) %>%
 # Adding TF -> HLH gene edges lets the HLH genes enter the network as
 # downstream endpoints instead of inputs
 trn <- net %>%
-  dplyr::filter(target %in% hlh) %>%
-  dplyr::select(source, target, interaction = mor)
+  dplyr::filter(target %in% hlh) %>% # Filter for TFs in collecTRI which regulate HLH genes
+  dplyr::select(source, target, interaction = mor) # Keep the TFs, the target gene, and the interaction
 
-pkn <- dplyr::bind_rows(sig, trn) %>% 
-  dplyr::distinct() %>%
-  dplyr::select(source, interaction, target)
+pkn <- dplyr::bind_rows(sig, trn) %>% # bind the filtered signalling network with the collecTRI network
+  dplyr::distinct() %>% # exclude duplicate rows
+  dplyr::select(source, interaction, target) # keep the TFs, the target gene, and the interaction
 
-dim(pkn)                  # 14,989 edges
+# dim(pkn) returns 14,979 interactions
 
+# save the combined pkn for CARNIVAL
 saveRDS(pkn, "pkn_full.rds")
 
-hlh[hlh %in% c(pkn$source, pkn$target)]   # 6 of 8
+# how many HLH genes serve as either a source or target of an interaction in the combined network?
+hlh[hlh %in% c(pkn$source, pkn$target)] 
+# PRF1, STX11, STXBP2, RAB27A, SH2D1A, XIAP
 
 # UNC13D and LYST have no regulators in CollecTRI either
 net %>% 
   dplyr::filter(target %in% c("UNC13D", "LYST"))   # 0 rows
 
-# But PRF1 is still a sink in the coupled network: 11 regulators, 0 targets
+# But PRF1 is still a sink in the coupled network: 16 regulators, 0 targets
 pkn %>% 
-  dplyr::filter(target == "PRF1")
+  dplyr::filter(target == "PRF1") # 16 rows = 16 PRF1 regulators
 
 pkn %>% 
-  dplyr::filter(source == "PRF1")   # 0 rows
+  dplyr::filter(source == "PRF1") # 0 rows = 0 targets: consistent with biology
 
 # Confirm the layers join: PRF1's regulators must be in the signalling layer
+# Which TFs regulating PRF1 are also in the signalling network either as a source or target?
 prf1_tfs <- net %>% 
   dplyr::filter(target == "PRF1") %>% 
   dplyr::pull(source)
 
 prf1_tfs[prf1_tfs %in% c(sig$source, sig$target)]
 
+# STAT3, MITF, NFKB1, RELA, STAT4, ELF4, ETS1, STAT5A, STAT5B, STAT1, and RUNX3
+
 # End-to-end reachability: cytokine receptor -> signalling -> TF -> PRF1
-g <- igraph::graph_from_data_frame(pkn %>% dplyr::select(source, target),
-                                   directed = TRUE)
+cyt_reach <- igraph::graph_from_data_frame(
+  pkn %>% 
+    dplyr::select(source, target),
+  directed = TRUE)
 
 receptors <- c("IL12RB1", "IL12RB2", "IFNGR1", "IFNGR2", "IL2RB", "IL18R1")
-receptors <- receptors[receptors %in% igraph::V(g)$name]
+receptors <- receptors[receptors %in% igraph::V(cyt_reach)$name]
 
 for (i in receptors) {
-  d <- igraph::distances(g, v = i, to = "PRF1", mode = "out")
+  d <- igraph::distances(cyt_reach, v = i, to = "PRF1", mode = "out")
   cat(i, "-> PRF1:", ifelse(is.finite(d), paste(d, "hops"), "unreachable"), "\n")
 }
 
 # Canonical JAK-STAT path recovered
-igraph::V(g)$name[igraph::shortest_paths(g, from = "IL12RB1",
+igraph::V(cyt_reach)$name[igraph::shortest_paths(cyt_reach, from = "IL12RB1",
                                          to = "PRF1", mode = "out")$vpath[[1]]]
-
 
 # ---- Cell-type-specific PKN ----
 # An edge cannot be active if the protein is not expressed in that cell type

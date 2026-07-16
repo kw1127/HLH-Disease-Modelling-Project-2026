@@ -92,6 +92,4 @@ clustree <- clustree(seurat) # Justify which resolution to use
 ggsave("clustree.png", plot = clustree, width = 8, height = 10, dpi = 300)
 
 Idents(seurat) <- "RNA_snn_res.0.3"  # Set resolution
-
-# pseudobulk analysis
-# check idents of seurat samples and correct for batch effects
+# check idents of seurat samples and correct for batch effectsC

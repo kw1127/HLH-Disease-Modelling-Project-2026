@@ -185,11 +185,12 @@ DefaultAssay(seurat_filt) <- "tfsulm"
 
 dot_tfs_focused <- DotPlot(seurat_filt, features = top_per_type) +
   RotatedAxis() +
-  scale_colour_gradient2(low = "#2166AC", 
-                         mid = "white", 
-                         high = "#B2182B",
-                         midpoint = 0, 
-                         name = "Mean activity") +
+  scale_colour_gradient2(
+    low = "#2166AC", 
+    mid = "white", 
+    high = "#B2182B",
+    midpoint = 0, 
+    name = "Mean activity") +
   labs(title = "Mean activity of the top cell-type-defining TFs",
        x = "Transcription factor",
        y = "Cell type") +

@@ -1,69 +1,69 @@
 # Prior knowledge network: signalling + transcriptional layers
 Idents(seurat_filt) <- "celltype_final"
 
-# Import prior knowledge network
-ppi <- omnipath_interactions()
+# Import prior knowledge network from OmniPath
+ppi <- omnipath_interactions() # 85,217 interactions
 
-nrow(ppi)   # 85,217 interactions
+# Signalling layer includes directed and unambiguously signed interactions.
+# Curation_effort >= 2 was chosen.
+# >=3 loses key interactions involved in HLH gene regulation.
+# >=1 gives ~70k edges which is too big for solving a network.
 
-# Signalling layer: directed and unambiguously signed
-# curation_effort >= 2 chosen: >=3 loses the IL12RB1 -> PRF1 path,
-# >=1 gives ~70k edges which is intractable for the ILP solver
+# Build a signed, directed prior knowledge network (PKN) for CARNIVAL from OmniPath PPIs
 sig <- ppi %>%
-  dplyr::filter(consensus_direction == 1,
-                consensus_stimulation + consensus_inhibition == 1,
-                curation_effort >= 2) %>%
-  dplyr::mutate(interaction = ifelse(consensus_stimulation == 1, 1, -1)) %>%
-  dplyr::select(source = source_genesymbol,
-                target = target_genesymbol,
-                interaction) %>%
-  dplyr::distinct()
+  dplyr::filter(consensus_direction == 1, # keep interactions with an agreed direction (source -> target)
+                consensus_stimulation + consensus_inhibition == 1, # keep only signed edges
+                curation_effort >= 2) %>% # keep only edges supported by >= 2 curation sources
+  dplyr::mutate(interaction = ifelse(consensus_stimulation == 1, 1, -1)) %>% # encode sign as CARNIVAL expects: +1 activation, -1 inhibition
+  dplyr::select(source = source_genesymbol, # regulator gene (edge start)
+                target = target_genesymbol, # target gene (edge end)
+                interaction) %>% # the signed edge weight
+  dplyr::distinct() # remove duplicate edges
 
-nrow(sig)
+# nrow(sig) returns 14,947 interactions survived
 
-
-# HLH genes cannot serve as CARNIVAL input nodes
-
+# Can HLH genes be used as CARNIVAL inputs?
 # Which are in the signalling layer at all?
-hlh[hlh %in% c(sig$source, sig$target)]  
+hlh[hlh %in% c(sig$source, sig$target)]  # STX11, STXBP2, SH2D1A, XIAP
 
 # Which are absent entirely?
-setdiff(hlh, c(sig$source, sig$target))     
+setdiff(hlh, c(sig$source, sig$target)) # PRF1, UNC13D, RAB27A, LYST
 
-# Which have outgoing edges? A source node needs these to propagate a perturbation
+# Which have outgoing edges? A source node needs these for CARNIVAL to propagate a perturbation
 sig %>% 
   dplyr::filter(source %in% hlh) %>% 
-  dplyr::count(source)                      
+  dplyr::count(source) 
 
-# Which are sinks? Sinks have regulators but regulate nothing
-intersect(hlh, setdiff(sig$target, sig$source)) 
+# STXBP2 has 1 outgoing edges and XIAP has 5
+
+# Which are sinks? Sinks have regulators (incoming edges) but regulate nothing (no outgoing edges)
+intersect(hlh, setdiff(sig$target, sig$source)) # STX11 and SH2D1A
 
 # Of the two with outgoing edges, do they reach any of the measured TFs?
-# A source that reaches no measurements contributes nothing to the solution
+# A source that reaches no target contributes nothing
 g_sig <- igraph::graph_from_data_frame(sig %>% 
                                          dplyr::select(source, target),
                                        directed = TRUE)
 
-tfs_measured <- df %>%
-  dplyr::filter(celltype == "NK cells") %>%
-  dplyr::pull(source) %>%
-  intersect(igraph::V(g_sig)$name)
+# Measured TFs present in the network: NK-cell TFs that also exist as nodes in g_sig
+tfs_measured_nk <- df %>%
+  dplyr::filter(celltype == "NK cells") %>% # NK TF activity results
+  dplyr::pull(source) %>% # the TF names
+  intersect(igraph::V(g_sig)$name) # keep only those that are nodes in the PKN
 
+# For each HLH gene that has outgoing edges (STXBP2, XIAP), count how many measured TFs it can reach
 for (s in intersect(hlh, sig$source)) {
-  d <- igraph::distances(g_sig, v = s, to = tfs_measured, mode = "out")
-  cat(s, "reaches", sum(is.finite(d)), "of", length(tfs_measured), "TFs\n")
+  d <- igraph::distances(g_sig, v = s, to = tfs_measured_nk, mode = "out") # shortest-path distance, following edge direction
+  cat(s, "reaches", sum(is.finite(d)), "of", length(tfs_measured_nk), "TFs\n") # finite distance = a directed path exists; Inf = unreachable
 }
 
-# Summary:
-#   PRF1, UNC13D, LYST, RAB27A  absent from the signalling layer
-#   STX11, SH2D1A are present but sinks, no outgoing edges
-#   STXBP2 has 1 outgoing edge
-#   XIAP has 5 outgoing edges, but monocyte and DC-enriched, not NK/T
-#
-# The HLH genes are effectors of cytotoxic granule exocytosis. They carry out the
-# final step of the pathway and do not signal onward, so they have no outgoing edges.
+# Summary of signalling layer
+#   PRF1, UNC13D, RAB27A, LYST are absent from the signed signalling layer
+#   STX11, SH2D1A are have no outgoing edges so can't propagate
+#   STXBP2 has an outgoing edge but reaches no measured TF
+#   XIAP has five outgoing edges and reach 387/486 TFs; the only usable perturbation node
 
-# ---- Is this a filtering artefact, or structural? ----
+# Is this a filtering artefact, or structural?
 
 # PRF1 is absent from the signalling layer before any filter is applied
 "PRF1" %in% ppi$source_genesymbol   # FALSE
@@ -73,23 +73,84 @@ for (s in intersect(hlh, sig$source)) {
 # for CARNIVAL, which needs edges that are both directed and signed
 all_int <- OmnipathR::import_all_interactions()
 
-all_int %>%
+prf1_all <- all_int %>%
   dplyr::filter(source_genesymbol == "PRF1") %>%
   dplyr::select(target_genesymbol, is_directed, is_stimulation,
                 is_inhibition, curation_effort, n_references)
 
-#   PRF1 -> CTSB signed, but curation_effort 0 and 0 references
-#   PRF1 -> CDK2 signed, but curation_effort 0 and 0 references
-#   PRF1 -> MTOR unsigned
-#   PRF1 -> PRKCA unsigned
+#   PRF1 -> CTSB is signed and directed, but curation_effort 0 and 0 references
+#   PRF1 -> CDK2 is signed and directed, but curation_effort 0 and 0 references
+#   PRF1 -> MTOR is directed, but unsigned
+#   PRF1 -> PRKCA is directed, unsigned
 
-# Same check across all 8 HLH genes
-all_int %>%
+# Count usable outgoing edges (directed AND unambiguously signed) for each HLH gene,
+# across ALL OmniPath interaction layers.
+hlh_all <- all_int %>%
   dplyr::filter(source_genesymbol %in% hlh,
                 is_directed == 1,
                 is_stimulation + is_inhibition == 1) %>%
-  dplyr::count(source_genesymbol, name = "usable_outgoing_edges")
+  dplyr::count(source_genesymbol, name = "usable_outgoing_edges") %>%
+  dplyr::right_join(tibble::tibble(source_genesymbol = hlh), by = "source_genesymbol") %>%
+  dplyr::mutate(usable_outgoing_edges = tidyr::replace_na(usable_outgoing_edges, 0)) %>%
+  dplyr::arrange(desc(usable_outgoing_edges))
 
+# Usable outgoing edges per HLH gene
+edges_in_pkn <- sig %>%
+  dplyr::filter(source %in% hlh) %>%
+  dplyr::count(source, name = "usable_outgoing_edges") %>%
+  dplyr::rename(Gene = source)
+
+# How many measured TFs can each gene reach? 
+# Use the full measured-TF panel present in the network, not specific cell types
+tfs_panel <- df %>%
+  dplyr::pull(source) %>%
+  unique() %>%
+  intersect(igraph::V(g_sig)$name)
+
+hlh <- as.character(hlh)
+
+reach_counts <- vapply(hlh, function(s) {
+  if (!s %in% igraph::V(g_sig)$name) return(0L)
+  d <- igraph::distances(g_sig, v = s, to = tfs_panel, mode = "out")
+  as.integer(sum(is.finite(d)))
+}, integer(1))
+
+# Assemble the full table of all 8 HLH genes
+hlh_table <- tibble::tibble(Gene = hlh) %>%
+  dplyr::left_join(edges_in_pkn, by = "Gene") %>%
+  dplyr::mutate(
+    usable_outgoing_edges = tidyr::replace_na(usable_outgoing_edges, 0L),
+    tfs_reached           = reach_counts[Gene],
+    in_pkn = dplyr::case_when(
+      !Gene %in% c(sig$source, sig$target) ~ "Absent",
+      Gene %in% sig$target & !Gene %in% sig$source ~ "Sink",
+      TRUE ~ "Present"
+    ),
+    usable_input = ifelse(tfs_reached > 0, "Yes", "No"),
+    reason = dplyr::case_when(
+      in_pkn == "Absent" ~ "No signed directed edges in the network",
+      in_pkn == "Sink" ~ "No outgoing edges",
+      tfs_reached == 0 ~ "Has outgoing edges but reaches none of the measured TFs",
+      TRUE ~ "Upstream regulator with broad reach to measured TFs"
+    )
+  ) %>%
+  dplyr::arrange(desc(tfs_reached), desc(usable_outgoing_edges)) %>%
+  dplyr::select(
+    Gene,
+    `In PKN` = in_pkn,
+    `Usable outgoing edges` = usable_outgoing_edges,
+    `Measured TFs reached` = tfs_reached,
+    `Usable CARNIVAL input` = usable_input,
+    Reason = reason) %>%
+  gt() %>%
+  tab_header(
+    title = "Suitability of HLH-associated genes as CARNIVAL perturbation nodes",
+    subtitle = "Edges and reachability computed on the signed signalling PKN"
+  ) %>%
+  tab_source_note(
+    source_note = "Reachability: number of measured transcription factors reachable via a directed path. Genes absent from the PKN or acting as sinks cannot serve as perturbation nodes."
+  ) %>%
+  gtsave("hlh_carnival_suitability.png")
 
 # ---- Couple signalling with transcriptional layer ----
 # Adding TF -> HLH gene edges lets the HLH genes enter the network as

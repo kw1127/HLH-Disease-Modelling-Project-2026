@@ -9,11 +9,15 @@ ref_monaco <- celldex::MonacoImmuneData()
 # cell type annotation with SingleR
 # With DICE labels
 pred_dice <- SingleR(
-  test = expr, ref = ref_dice, labels = ref_dice$label.main)
+  test = expr, 
+  ref = ref_dice, 
+  labels = ref_dice$label.main)
 
 # With monaco labels
 pred_monaco <- SingleR(
-  test = expr, ref = ref_monaco, labels = ref_monaco$label.main)
+  test = expr, 
+  ref = ref_monaco, 
+  labels = ref_monaco$label.main)
 
 # Assign to seurat object
 seurat$celltype_dice <- pred_dice$labels
@@ -56,14 +60,20 @@ ggsave("annotation_compare.png", plot = annotation_compare, width = 14, height =
 
 # Monaco annotation leaves an unassigned T cell cluster
 # Find positive marker genes for cluster 5 (the unassigned T cluster)
-markers_c5 <- FindMarkers(seurat, ident.1 = 5, only.pos = TRUE) %>% # cluster 5 vs all other cells, keep only genes upregulated
-  arrange(desc(avg_log2FC)) %>% # sort by fold change 
+markers_c5 <- FindMarkers(seurat, ident.1 = 5, only.pos = TRUE) %>%
+  filter(p_val_adj < 0.05) %>% # keep significant
+  mutate(pct_diff = pct.1 - pct.2) %>% # specificity
+  arrange(desc(pct_diff), desc(avg_log2FC)) %>% # specific first, then strong
   head(15) # keep the top 15
 
 # Format the marker table and save it as an image.
 markers_c5 %>%
   tibble::rownames_to_column("gene") %>% # move gene names from row names into a "gene" column
   dplyr::mutate(across(where(is.numeric), ~signif(.x, 3))) %>% # round all numeric columns to 3 significant figures
+  gt() %>% # build a styled gt table
+  gt::tab_header(title = "Top markers defining cluster 5") %>% # table header
+  gt::cols_label(avg_log2FC = "log2FC", p_val_adj = "p.adj") %>% # column names
+  gtsave("cluster5_markers.png") # save the table as an image
   gt() %>% # build a styled gt table
   gt::tab_header(title = "Top markers defining cluster 5") %>% # table header
   gt::cols_label(avg_log2FC = "log2FC", p_val_adj = "p.adj") %>% # column names
@@ -78,14 +88,14 @@ seurat$celltype_final <- as.character(seurat$celltype_monaco)
 # ZNF683 (Hobit) supports an innate-like effector phenotype. 
 # Monaco leaves these as generic "T cells" since γδ T are neither
 # CD4 nor CD8 and don't match its reference profiles.
-seurat$celltype_final[seurat$RNA_snn_res.0.3 == "5"] <- "gdT cells"
+seurat$celltype_final[seurat$RNA_snn_res.0.3 == "5"] <- "γδT cells"
 
 # Set the active identity of the seurat object to the final cell-type labels
 Idents(seurat) <- "celltype_final"
 
 # Keep cell populations with sufficient cells for TF inference
 # Dropped: Basophils (n=1), Progenitors (n=43)
-keep <- c("Monocytes", "CD4+ T cells", "CD8+ T cells", "gdT cells",
+keep <- c("Monocytes", "CD4+ T cells", "CD8+ T cells", "γδT cells",
           "B cells", "NK cells", "Dendritic cells")
 
 seurat_filt <- subset(seurat, idents = keep)
@@ -94,7 +104,7 @@ as.data.frame(table(Idents(seurat))) %>% # all cell populations with counts
   dplyr::rename(`Cell type` = Var1, `n cells` = Freq) %>%
   dplyr::mutate(Status = dplyr::case_when(
     `Cell type` %in% keep ~ "Retained",
-    `Cell type` == "T cells" ~ "Dropped (unresolved identity)", # ambiguous assignment
+    `Cell type` == "T cells" ~ "Dropped (unresolved identity)", 
     TRUE ~ "Dropped (n < 50)" # too few cells for stable inference
   )) %>%
   dplyr::arrange(desc(`n cells`)) %>% # largest populations first
@@ -103,7 +113,9 @@ as.data.frame(table(Idents(seurat))) %>% # all cell populations with counts
   gtsave("populations_filtering.png")
 
 # UMAP of the cell type annotation with SingleR, monaco ref data, and manual annotation
-umap_ct <- DimPlot(seurat_filt, label = TRUE, repel = TRUE) + NoLegend()
+umap_ct <- DimPlot(seurat_filt, label = TRUE, repel = TRUE) +
+  NoLegend()
+
 ggsave("umap_celltypes.pdf", umap_ct, width = 7, height = 6)
 
 # Markers per cell type (validation for annotation).
@@ -118,6 +130,7 @@ all_markers <- FindAllMarkers(seurat_filt,
 
 # what are the top 5 differentially-expressed genes per cell type?
 top_markers <- all_markers %>%
+  dplyr::filter(p_val_adj < 0.05, pct.1 > 0.25) %>%
   dplyr::group_by(cluster) %>%
   dplyr::slice_max(n = 5, order_by = avg_log2FC, with_ties = FALSE) %>%
   dplyr::pull(gene) %>%
@@ -126,21 +139,22 @@ top_markers <- all_markers %>%
 # Dot plot of the top 5 markers genes per cell type
 # Plots the z-scored expression of each gene in each cell type
 DotPlot(seurat_filt, features = top_markers) +
-  ggplot2::coord_flip() + # genes on y, cell types on x (often reads better)
+  ggplot2::coord_flip() + # genes on y, cell types on x 
   ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
 ggsave("celltype_dotplot.png", width = 10, height = 12, dpi = 300)
 
-# Prepare for heatmap
+# Heatmap of top 10 differentially-expressed genes per cell type
 top_markers_hm <- all_markers %>%
+  dplyr::filter(p_val_adj < 0.05, pct.1 > 0.25) %>%
   dplyr::group_by(cluster) %>%
   dplyr::slice_max(n = 10, order_by = avg_log2FC, with_ties = FALSE)
 
-DoHeatmap(seurat_filt, 
+DoHeatmap(seurat_filt,
           features = top_markers_hm$gene,
           angle = 45,
           size = 4,
-          hjust = 0) + 
+          hjust = 0) +
   ggplot2::ggtitle("Top 10 marker genes per cell type") +
   ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 16, face = "bold")) +
   NoLegend()

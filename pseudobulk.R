@@ -16,17 +16,21 @@ library(tidyr)
 library(RColorBrewer)
 library(tibble)
 library(ggplot2)
+library(OmnipathR)
+library(gt)
 
 # ============================================================
 # 1. Load data
 # ============================================================
 
+# A healthy pbmc scRNA-seq dataset of 20 samples from 2 experimental batches (10 samples each batch)
 kotliarov <- KotliarovPBMCData(
   mode = c("rna", "adt"),
   ensembl = FALSE,
   location = TRUE,
   legacy = FALSE)
 
+# Create seurat object 
 pbmc <- CreateSeuratObject(
   counts = counts(kotliarov),
   meta.data = as.data.frame(colData(kotliarov)))
@@ -62,7 +66,7 @@ p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
 p2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 ggsave("02_qc_scatter.png", p1 + p2, width = 10, height = 4, dpi = 300)
 
-# subset pbmcs
+# subset pbmcs based on the violin plots
 pbmc <- subset(pbmc, 
                subset = nFeature_RNA > 200 &
                 nFeature_RNA < 4000 &
@@ -613,4 +617,129 @@ pheatmap(t(ct_means[intersect(hlh, rownames(ct_means)), ]),
          main = "HLH gene expression (pseudobulk, scaled per gene)",
          filename = "hlh_expression_pseudo.png",
          width = 8, height = 5)
+
+# Plot activity of top 5 TFs by cell type
+# First, select significant, most-characteristic TFs per cell type ----
+top5_tfs <- tf_acts %>%
+  dplyr::filter(p_adj < 0.05) %>%
+  group_by(condition) %>%
+  slice_max(abs(score), n = 5, with_ties = FALSE) %>%
+  ungroup() %>%
+  pull(source) %>%
+  unique()
+
+top5_tfs <- intersect(top5_tfs, rownames(tf_mat))
+
+# Fixed lineage ordering for rows for better readability
+ct_order <- c("CD4 T naive", "CD4 T memory", "CD8 T naive", "CD8 T memory",
+              "CD8 T effector", "NK", "B naive", "B memory",
+              "pDC", "cDC2", "CD14 Mono", "CD14 Mono IFN", "CD16 Mono")
+ct_order <- intersect(ct_order, colnames(tf_mat)) # guard against name mismatch
+
+top5_mat <- t(tf_mat[top5_tfs, ct_order, drop = FALSE])
+
+# Colour scale with less saturation 
+limit <- quantile(abs(top5_mat), 0.99)
+breaks <- c(seq(-lim, 0, length.out = 51),
+               seq(lim / 50, lim, length.out = 50))
+
+# Column annotation by functional module
+module_map <- c(
+  RFX5 = "MHC-II", RFXAP = "MHC-II", RFXANK = "MHC-II", CIITA = "MHC-II", RFX1 = "MHC-II",
+  SPI1 = "Myeloid", CEBPA = "Myeloid", CEBPG = "Myeloid", CEBPB = "Myeloid",
+  JUN = "Myeloid", JUND = "Myeloid", NFE2L2 = "Myeloid", SP1 = "Myeloid", PPARD = "Myeloid",
+  EOMES = "Cytotoxic", STAT4 = "Cytotoxic", ZGLP1 = "Cytotoxic",
+  TBX21 = "Cytotoxic", RUNX3 = "Cytotoxic",
+  EBF1 = "B lineage", PAX5 = "B lineage", POU2AF1 = "B lineage",
+  TRERF1 = "T lineage", RORC = "T lineage", NFKB2 = "T lineage",
+  FOXP1 = "T lineage", SATB1 = "T lineage", IKZF1 = "T lineage",
+  TCF7 = "T lineage", LEF1 = "T lineage", ETS1 = "T lineage",
+  STAT1 = "Interferon", IRF1 = "Interferon", IRF5 = "Interferon",
+  IRF7 = "Interferon", IRF8 = "Interferon", RELA = "NF-kB"
+)
+
+tf_annot <- data.frame(
+  Module = unname(module_map[colnames(top5_mat)]),
+  row.names = colnames(top5_mat)
+)
+
+module_cols <- list(Module = c(
+  "MHC-II" = "#4C72B0",
+  "Myeloid" = "#DD8452",
+  "Cytotoxic" = "#C44E52",
+  "B lineage" = "#55A868",
+  "T lineage" = "#8172B3",
+  "Interferon" = "#937860",
+  "NF-kB" = "#8C8C8C"
+))
+
+pheatmap(
+  mat = top5_mat,
+  color = colors.use,
+  breaks = my_breaks,
+  border_color = "white",
+  cluster_rows = FALSE,         
+  cluster_cols = TRUE,          
+  annotation_col = tf_annot,
+  annotation_colors = module_cols,
+  cellwidth = 20,
+  cellheight = 20,
+  treeheight_col = 20,
+  main = "Cell-type-specific transcription factor activity (FDR < 0.05)",
+  angle_col = 90,
+  fontsize_col = 9,
+  fontsize_row   = 10,
+  filename = "24_tf_top5_heatmap.png",
+  width = 9, height = 5
+)
+
+# ============================================================
+# 12. Prepare CARNIVAL inputs
+# ============================================================
+
+Idents(pbmc) <- "celltype"
+
+# Import prior knowledge network from OmniPath
+ppi <- omnipath_interactions() # 85,217 interactions
+
+# Build a signed, directed prior knowledge network (PKN) for CARNIVAL from OmniPath PPIs
+
+# Signalling layer includes directed and unambiguously signed interactions.
+# Curation_effort >= 2 was chosen.
+# >=3 loses key interactions involved in HLH gene regulation.
+# >=1 gives ~70k edges which is too big for solving a network.
+sig <- ppi %>%
+  dplyr::filter(consensus_direction == 1, # keep interactions with an agreed direction (source -> target)
+                consensus_stimulation + consensus_inhibition == 1, # keep only signed edges
+                curation_effort >= 2) %>% # keep only edges supported by >= 2 curation sources
+  dplyr::mutate(interaction = ifelse(consensus_stimulation == 1, 1, -1)) %>% # encode sign as CARNIVAL expects: +1 activation, -1 inhibition
+  dplyr::select(source = source_genesymbol, # regulator gene (edge start)
+                target = target_genesymbol, # target gene (edge end)
+                interaction) %>% # the signed edge weight
+  dplyr::distinct() # remove duplicate edges
+
+# nrow(sig) returns 14,947 interactions survived
+
+# Can HLH genes be used as CARNIVAL inputs?
+# Which are in the signalling layer at all?
+hlh[hlh %in% c(sig$source, sig$target)]  # STX11, STXBP2, SH2D1A, XIAP
+
+# Which are absent entirely?
+setdiff(hlh, c(sig$source, sig$target)) # PRF1, UNC13D, RAB27A, LYST
+
+# Which have outgoing edges? A source node needs these for CARNIVAL to propagate a perturbation
+sig %>% 
+  dplyr::filter(source %in% hlh) %>% 
+  dplyr::count(source) 
+
+# STXBP2 has 1 outgoing edges and XIAP has 5
+
+# Which are sinks? Sinks have regulators (incoming edges) but regulate nothing (no outgoing edges)
+intersect(hlh, setdiff(sig$target, sig$source)) # STX11 and SH2D1A
+
+# Of the two with outgoing edges, do they reach any of the measured TFs?
+# A source that reaches no target contributes nothing
+g_sig <- igraph::graph_from_data_frame(sig %>% 
+                                         dplyr::select(source, target),
+                                       directed = TRUE)
 

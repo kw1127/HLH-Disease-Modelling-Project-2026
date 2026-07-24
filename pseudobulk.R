@@ -458,70 +458,64 @@ saveRDS(pbmc.clean, "pbmc_annotated.rds")
 # 10. Pseudobulk
 # ============================================================
 
-# Donor 209 has cells in both batches. 
+# Donor 209 has cells in both batches.
 # Kept as two separate samples.
-pbmc$pb_sample <- paste(pbmc$sampleid, pbmc$batch, sep = "_")
+cells_donor <- table(pbmc$sampleid, pbmc$batch)
+names(which(rowSums(cells_donor > 0) > 1))  # donor 209
+cells_donor["209", ]                        # 1188 cells batch 1, 1977 batch 2
 
-# Cells per celltype-sample pair
-cells_per_group <- table(pbmc$celltype, pbmc$pb_sample)
-rowSums(cells_per_group >= 10)
+pbmc.clean$pb_sample <- paste(pbmc.clean$sampleid, pbmc.clean$batch, sep = "_")
 
-# AggregateExpression() sums all counts across all cells sharing celltype and sample.
-# Returns a matrix of features x groups.
-# Summing keeps the raw counts for DESeq2.
+# Merge the activated state back into classical monocytes.
+# Cluster 13 is an IFN-stimulated state, not a cell type: 531 of its 625
+# cells come from donor 209 alone, and only 3 donors contribute >=10 cells.
+# A one-vs-rest contrast on it would describe one individual.
+pbmc.clean$celltype[pbmc.clean$celltype == "activated classical monocytes"] <-
+  "classical monocytes"
+pbmc.clean$celltype <- droplevels(factor(pbmc.clean$celltype))
+
+# AggregateExpression() sums all counts across all cells sharing celltype
+# and sample. Returns features x groups. Summing keeps raw counts for DESeq2.
 pseudo <- AggregateExpression(
-  pbmc,
+  pbmc.clean,
   assays = "RNA",
-  slot = "counts",    
+  slot = "counts",
   group.by = c("celltype", "pb_sample"),
   return.seurat = FALSE)$RNA
 
-# Sample sheet
-meta_pb <- data.frame(column = colnames(pseudo), stringsAsFactors = FALSE) %>%
-  mutate(
-    celltype = sub("_[0-9]+-[0-9]+$", "", column),
-    pb_sample = sub("^.*_([0-9]+-[0-9]+)$", "\\1", column),
-    sampleid = sub("-.*$", "", pb_sample),
-    batch = sub("^.*-", "", pb_sample))
+# Column names are built by rewriting any "_" inside each group value to "-",
+# then joining the two values with "_". Rebuild that key from the metadata
+# rather than parsing it back out of the column names.
+n_cells <- as.data.frame(
+  table(celltype  = droplevels(factor(pbmc.clean$celltype)),
+        pb_sample = factor(pbmc.clean$pb_sample)),
+  stringsAsFactors = FALSE)
 
+n_cells$column <- paste(gsub("_", "-", n_cells$celltype),
+                        gsub("_", "-", n_cells$pb_sample), sep = "_")
+
+# Fires only if a pseudobulk column exists that no celltype-donor pair
+# could have produced, i.e. the mangling assumption above is wrong.
+stopifnot(all(colnames(pseudo) %in% n_cells$column))
+
+meta_pb <- n_cells[match(colnames(pseudo), n_cells$column), ]
 rownames(meta_pb) <- meta_pb$column
+names(meta_pb)[names(meta_pb) == "Freq"] <- "n_cells"
+
+# Drop groups aggregated from too few cells to be a stable profile
+meta_pb <- meta_pb[meta_pb$n_cells >= 10, ]
+pseudo <- pseudo[, rownames(meta_pb)]
+
 meta_pb$celltype <- factor(meta_pb$celltype)
-meta_pb$batch <- factor(meta_pb$batch)
+meta_pb$pb_sample <- factor(meta_pb$pb_sample)
+meta_pb$sampleid <- sub("_.*$", "", meta_pb$pb_sample)
+meta_pb$batch <- factor(sub("^.*_", "", meta_pb$pb_sample))
 
-# Filter and normalise 
-# design = ~ 1 because no comparison is being run
-dds <- DESeqDataSetFromMatrix(
-  countData = pseudo,
-  colData = meta_pb,
-  design = ~ 1)
+table(meta_pb$celltype)
 
-# Mild filter — HLH genes must survive to be perturbed downstream.
-keep <- rowSums(counts(dds) >= 10) >= 10
-dds <- dds[keep, ]
-nrow(dds)
-
-dds <- estimateSizeFactors(dds)
-
-vsd <- vst(dds, blind = TRUE)
-mat <- assay(vsd)
-dim(mat)
-
-# QC the aggregates
-# Samples should separate by cell type, not by batch. 
-# Batch is confounded with donor in this design, so strong batch separation cannot be distinguished from
-# donor variation.
-ggsave("21_pca_celltype.png", plotPCA(vsd, intgroup = "celltype"), width = 7, height = 5, dpi = 300)
-ggsave("22_pca_batch.png", plotPCA(vsd, intgroup = "batch"), width = 7, height = 5, dpi = 300)
-
-# --- Expressed genes per cell type ---
-# Used downstream to restrict the CARNIVAL PPI network to genes actually
-# present in the cell type being modelled.
-expressed <- lapply(split(seq_len(ncol(mat)), meta_pb$celltype), function(i) {
-  rownames(mat)[rowMeans(mat[, i, drop = FALSE]) > 5]
-})
-sapply(expressed, length)
-
-# Confirm HLH genes are detected in the cell types of interest
+# ============================================================
+# 11. Differential expression analysis with DESeq2
+# ============================================================
 hlh <- c(
   "PRF1",   
   "UNC13D",  
@@ -533,10 +527,69 @@ hlh <- c(
   "XIAP"
 )
 
-hlh[!hlh %in% rownames(mat)]
+dds <- DESeqDataSetFromMatrix(
+  countData = pseudo,
+  colData = meta_pb,
+  design = ~ pb_sample + celltype)
 
-round(rowMeans(mat[intersect(hlh, rownames(mat)),
-                   meta_pb$celltype %in% c("CD8 T effector", "NK")]), 2)
+# Mild filter 
+keep <- rowSums(counts(dds) >= 10) >= 5
+dds <- dds[keep, ]
+
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+vsd <- vst(dds, blind = TRUE)
+mat <- assay(vsd)
+
+ggsave("22_pca_celltype.png", plotPCA(vsd, intgroup = "celltype"),
+       width = 8, height = 5, dpi = 300)
+
+ggsave("23_pca_batch.png", plotPCA(vsd, intgroup = "batch"),
+       width = 7, height = 5, dpi = 300)
+
+# run DESeq2
+dds <- DESeq(dds, quiet = TRUE)
+
+png("24_dispersions.png", width = 7, height = 6, units = "in", res = 300)
+plotDispEsts(dds)
+dev.off()
+
+normalised_counts <- counts(dds, normalized = TRUE)
+
+# Expressed genes per cell type 
+# Used downstream to restrict the CARNIVAL PPI network to genes actually
+# present in the cell type being modelled.
+# Defined on the count scale: >= 5 normalised counts in at least half the
+# samples of that cell type. The earlier vst-based cut (> 5) sat above
+# most of the distribution and discarded seven of the eight HLH genes.
+ct_expressed <- lapply(
+  split(seq_len(ncol(dds)), colData(dds)$celltype),
+  function(i) {
+    rownames(dds)[rowMeans(normalised_counts[, i, drop = FALSE] >= 5) >= 0.5]
+  })
+
+sapply(ct_expressed, length)
+
+# HLH genes recovered per cell type (out of 8)
+sapply(ct_expressed, function(g) sum(hlh %in% g))
+
+# Mean normalised expression of the HLH genes in the cytotoxic compartments
+cyto <- colData(dds)$celltype %in% c("CD8 TEMRA", "MAIT / CD8 EM", "NK")
+round(rowMeans(normalised_counts[hlh, cyto]), 1)
+
+sampleDists <- dist(t(mat))
+png("25_sample_distances.png", width = 11, height = 10, units = "in", res = 300)
+pheatmap(as.matrix(sampleDists),
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         annotation_col = as.data.frame(colData(dds)[, c("celltype", "batch")]),
+         show_rownames = FALSE, show_colnames = FALSE,
+         color = colorRampPalette(rev(brewer.pal(9, "Blues")))(255))
+dev.off()
+
+# Which cell type is each sample's nearest neighbour?
+nn <- apply(as.matrix(sampleDists) + diag(Inf, ncol(mat)), 1, which.min)
+table(colData(dds)$celltype, colData(dds)$celltype[nn])
 
 # ============================================================
 # 11. TF activity (decoupleR + CollecTRI)

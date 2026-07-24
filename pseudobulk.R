@@ -18,7 +18,11 @@ library(tibble)
 library(ggplot2)
 library(OmnipathR)
 library(gt)
+library(leidenbase)
+library(mclust)
+library(patchwork)
 
+set.seed(42)
 # ============================================================
 # 1. Load data
 # ============================================================
@@ -76,7 +80,6 @@ pbmc <- subset(pbmc,
 # 3. Attach ADT
 # ============================================================
 
-# Doing this ensures the protein assay is subset to the same cells
 # Inspect the feature names
 adt_counts <- counts(altExp(kotliarov, "ADT"))
 rownames(adt_counts)
@@ -85,14 +88,17 @@ cells <- colnames(pbmc)
 adt_counts <- adt_counts[, cells]
 pbmc[["ADT"]] <- CreateAssayObject(counts = adt_counts)
 
-# CLR across cells. Protein counts are compositional with high background,
-# so RNA-style log-normalisation is not appropriate.
+# CLR (centered log-ratio) transforms each value by dividing by the geometric mean of its group, 
+# then taking the log. Protein counts from CITE-seq are compositional. 
+# The total counts per cell are set by sequencing depth, so only ratios between features carry information.
+# CLR is the standard transform for compositional data because it maps ratios to differences in log space, 
+# making the result independent of the arbitrary total.
+# RNA-style log normalisation divides by total counts per cell and scales to a fixed factor.
 pbmc <- NormalizeData(pbmc, assay = "ADT", normalization.method = "CLR", margin = 2)
 
 # ============================================================
 # 4. RNA preprocessing
 # ============================================================
-
 DefaultAssay(pbmc) <- "RNA"
 
 # Log-normalisation: divide each cell's gene counts by that cell's total counts,
@@ -117,7 +123,7 @@ pbmc <- ScaleData(pbmc)
 # PCs, reducing noise, and speeding up downstream computation.
 # Caveat: it's linear (misses nonlinear structure) and variance-driven, so uncorrected
 # technical variance (batch, depth) can dominate a PC.
-pbmc <- RunPCA(pbmc, npcs = 50)
+pbmc <- RunPCA(pbmc, npcs = 50, seed.use = 42)
 ggsave("03_pca.png", DimPlot(pbmc, reduction = "pca") + NoLegend(), width = 6, height = 5, dpi = 300)
 
 # Plots the variance captured by each PC in descending order.
@@ -135,26 +141,57 @@ ggsave("04_elbow.png", ElbowPlot(pbmc, ndims = 50), width = 6, height = 4, dpi =
 # neighbors each pair shares. 
 # dims = 1:x should match the number of PCs chosen from ElbowPlot.
 pbmc <- FindNeighbors(pbmc, dims = 1:15)
+res_seq <- seq(0.3, 1.0, by = 0.1)
 
-# Cluster cells by community detection such as louvain on that SNN graph.
-# Resolution controls granularity: higher = more, granular clusters. 
-pbmc <- FindClusters(pbmc, resolution = seq(0.3, 1.0, by = 0.1))
+# Leiden clustering
+pbmc <- FindClusters(pbmc, algorithm = 4, n.iter = 10, resolution = res_seq, random.seed = 42)
+
+leiden_cols <- grep("^RNA_snn_res", colnames(pbmc@meta.data), value = TRUE)
+
+for (col in leiden_cols) {
+  pbmc@meta.data[[sub("^RNA_snn", "leiden", col)]] <- pbmc@meta.data[[col]]
+}
+
+# Louvain — overwrites RNA_snn_res.* columns, hence the copy above
+pbmc <- FindClusters(pbmc, algorithm = 1, n.start = 10, n.iter = 10,
+                     resolution = res_seq, random.seed = 42)
+for (col in leiden_cols) {
+  pbmc@meta.data[[sub("^RNA_snn", "louvain", col)]] <- pbmc@meta.data[[col]]
+}
 
 # Compute a 2D UMAP embedding from the same 15 PCs for visualization.
 # Nonlinear projection that places similar cells near each other in a 2D space, capturing local structure.
 # Use the same dims as FindNeighbors so the graph and the plot are consistent.
-pbmc <- RunUMAP(pbmc, dims = 1:15)
+pbmc <- RunUMAP(pbmc, dims = 1:15, seed.use = 42)
 
-res_cols <- grep("^RNA_snn_res", colnames(pbmc@meta.data), value = TRUE)
-ggsave("05_umap_resolutions.png",
-       DimPlot(pbmc, group.by = res_cols, label = TRUE, ncol = 4) & NoLegend(),
+comparison <- data.frame(
+  resolution = res_seq,
+  n_leiden = sapply(res_seq, function(r) length(unique(pbmc@meta.data[[paste0("leiden_res.", r)]]))),
+  n_louvain = sapply(res_seq, function(r) length(unique(pbmc@meta.data[[paste0("louvain_res.", r)]]))),
+  ARI = sapply(res_seq, function(r) adjustedRandIndex(
+    pbmc@meta.data[[paste0("leiden_res.", r)]],
+    pbmc@meta.data[[paste0("louvain_res.", r)]])))
+
+print(comparison)
+
+ggsave("05_leiden_resolutions.png",
+       DimPlot(pbmc, group.by = paste0("leiden_res.", res_seq),
+               label = TRUE, ncol = 4) & NoLegend(),
+       width = 16, height = 8, dpi = 300)
+
+ggsave("05b_louvain_resolutions.png",
+       DimPlot(pbmc, group.by = paste0("louvain_res.", res_seq),
+               label = TRUE, ncol = 4) & NoLegend(),
        width = 16, height = 8, dpi = 300)
 
 # Find how cell clusters separate with each resolution
-ggsave("06_clustree.png", clustree(pbmc), width = 10, height = 10, dpi = 300)
+ggsave("06_clustree.png", clustree(pbmc, prefix = "leiden_res."), width = 10, height = 10, dpi = 300)
 
-Idents(pbmc) <- "RNA_snn_res.0.7"
-ggsave("07_umap_res07.png", DimPlot(pbmc, reduction = "umap", label = TRUE) + NoLegend(),
+Idents(pbmc) <- "leiden_res.0.7"
+ggsave("07_umap_res07.png",
+       DimPlot(pbmc, reduction = "umap", group.by = "leiden_res.0.7", label = TRUE) + 
+         NoLegend() +
+         ggtitle("Leiden, resolution 0.7"),
        width = 7, height = 6, dpi = 300)
 
 # ============================================================
@@ -165,37 +202,52 @@ expression <- GetAssayData(pbmc, layer = "data")
 
 reference <- celldex::MonacoImmuneData()
 
-prediction <- SingleR(
+# SingleR labels each cell by finding which reference cell type its gene expression ranks correlate best with (Spearman), 
+# then iteratively narrows down among the top-scoring candidates using markers specific to just those labels.
+pred.main <- SingleR(
   test = expression, 
   ref = reference, 
   labels = reference$label.main)
 
-pbmc$singler <- prediction$pruned.labels
+pred.fine <- SingleR(
+  test = expression, 
+  ref = reference, 
+  labels = reference$label.fine)
 
-png("08_singler_scoreheatmap.png", width = 8, height = 8, units = "in", res = 300)
-plotScoreHeatmap(prediction)
+table(pred.main$labels, pred.fine$labels)
+
+pbmc$main <- pred.main$labels
+pbmc$fine <- pred.fine$labels
+
+p_main <- DimPlot(pbmc, group.by = "main", label = TRUE, repel = TRUE) +
+  NoLegend() + ggtitle("label.main")
+
+p_fine <- DimPlot(pbmc, group.by = "fine", label = TRUE, repel = TRUE, label.size = 2.5) +
+  NoLegend() + ggtitle("label.fine")
+
+ggsave("08_singler_main_vs_fine.png", p_main + p_fine, width = 14, height = 6, dpi = 300)
+
+pbmc$singler.main <- pred.main$pruned.labels
+pbmc$singler.fine <- pred.fine$pruned.labels
+
+# Score heatmap: per-cell correlation against each reference label.
+# One clearly dominant row per cell = confident call; several bright rows = ambiguous,
+# usually meaning the reference can't resolve those subtypes at this granularity.
+png("09_singler_scoreheatmap.png", width = 10, height = 8, units = "in", res = 300)
+plotScoreHeatmap(pred.main)
 dev.off()
 
-ggsave("09_singler_delta.png", plotDeltaDistribution(prediction, ncol = 3), width = 9, height = 8, dpi = 300)
-summary(is.na(prediction$pruned.labels))
-
-ggsave("10_umap_singler.png",
-       DimPlot(pbmc, group.by = "singler", label = TRUE, repel = TRUE) + NoLegend(),
-       width = 7, height = 6, dpi = 300)
+# Delta = assigned label's score minus the median score across other labels.
+# Large delta = confident assignment; small delta = marginal, pruned to NA by pruneScores().
+# A label whose entire distribution sits low is suspect (cell type may be absent here).
+ggsave("10_singler_delta.png", plotDeltaDistribution(pred.main, ncol = 4),
+       width = 12, height = 8, dpi = 300)
+summary(is.na(pred.main$pruned.labels))
 
 # ============================================================
 # 7. Cross-check labels against clusters
 # ============================================================
-
-tab <- table(Assigned = prediction$pruned.labels, Cluster = Idents(pbmc))
-
-# Raw counts show which clusters are small enough that proportions mislead.
-tab
-
-# Column proportions: what fraction of each cluster carries each label.
-# Preferable to log10(tab + 10), which compresses a 50-cell and a 5000-cell
-# cluster into similar colours.
-round(prop.table(tab, margin = 2), 2)
+tab <- table(Assigned = pred.main$pruned.labels, Cluster = pbmc$leiden_res.0.7)
 
 png("11_singler_cluster_crosstab.png", width = 8, height = 6, units = "in", res = 300)
 pheatmap(prop.table(tab, margin = 2))
@@ -204,25 +256,30 @@ dev.off()
 # ============================================================
 # 8. Protein-based annotation refinement
 # ============================================================
+set.seed(42)
 
 # Monaco's "T cells" label is not a distinct population, but a compartment of
 # cells that could not be resolved by RNA. Resolve with protein instead.
-
+Idents(pbmc) <- "leiden_res.0.7"
 DefaultAssay(pbmc) <- "ADT"
 
-# --- Lineage gate ---
-# CD3 first: anything CD3-negative is not a T cell regardless of CD4 level,
-# since CD4 protein is genuinely expressed on monocytes.
-adt_lineage <- c("CD3-PROT", "CD4-PROT", "CD8-PROT", "CD14-PROT",
-                 "CD19-PROT", "CD56-PROT", "CD16-PROT", "HLA-DR-PROT")
+# Lineage panel
+# Anything CD3-negative is not a T cell regardless of CD4 level,
+# since CD4 protein is expressed on monocytes.
+# CD14 + CD16 together split classical / intermediate / non-classical monocytes.
+adt_lineage <- c("CD3-PROT", "CD4-PROT", "CD8-PROT", "CD19-PROT",
+                 "CD56-PROT", "CD14-PROT", "CD16-PROT", "HLA-DR-PROT")
 
-ggsave("12_adt_lineage_dotplot.png", DotPlot(pbmc, features = adt_lineage) + RotatedAxis(),
-       width = 8, height = 6, dpi = 300)
+ggsave("12_adt_lineage_dotplot.png",
+       DotPlot(pbmc, features = adt_lineage) + RotatedAxis(),
+       width = 8, height = 7, dpi = 300)
 
-ggsave("13_adt_lineage_violin.png", VlnPlot(pbmc, adt_lineage, stack = TRUE, flip = TRUE) + NoLegend(),
-       width = 8, height = 8, dpi = 300)
+ggsave("13_adt_lineage_violin.png",
+       VlnPlot(pbmc, adt_lineage, stack = TRUE, flip = TRUE, pt.size = 0) + NoLegend(),
+       width = 9, height = 8, dpi = 300)
 
-# --- Subset markers, once lineage is settled ---
+
+# Subset markers, once lineage is settled
 adt_subset <- c("CD45RA-PROT", "CD45RO-PROT", "CD62L-PROT", "CD197-PROT",
                 "CD127-PROT", "CD25-PROT", "CD57-PROT", "TCRgd-PROT",
                 "CD11c-PROT", "CD123-PROT", "CD1c-PROT", "CD303-PROT",
@@ -231,18 +288,15 @@ adt_subset <- c("CD45RA-PROT", "CD45RO-PROT", "CD62L-PROT", "CD197-PROT",
 ggsave("14_adt_subset_dotplot.png", DotPlot(pbmc, features = adt_subset) + RotatedAxis(),
        width = 10, height = 6, dpi = 300)
 
-# --- Background floor ---
+# Background
 # Signal sitting at isotype level is true negative; above it is real,
-# or ambient contamination. Sets the threshold for the calls above.
+# or ambient contamination.
 isotypes <- grep("sotype", rownames(pbmc[["ADT"]]), value = TRUE)
 
 ggsave("15_isotypes.png", VlnPlot(pbmc, isotypes, stack = TRUE, flip = TRUE) + NoLegend(),
        width = 7, height = 5, dpi = 300)
 
-# --- RNA markers as secondary evidence ---
-# CD4 mRNA drops out heavily in 10x and is near-zero even in true CD4 T cells —
-# never call CD4 identity from RNA.
-
+# RNA markers as secondary evidence
 DefaultAssay(pbmc) <- "RNA"
 
 markers_rna <- c(
@@ -260,24 +314,22 @@ markers_rna <- c(
 ggsave("16_rna_markers_dotplot.png", DotPlot(pbmc, features = markers_rna) + RotatedAxis(),
        width = 12, height = 6, dpi = 300)
 
-
-# --- Doublet check ---
 # Clusters showing mutually exclusive lineage markers (CD3+ and CD14+, or
-# CD4-high and CD8-high) are doublet candidates. Elevated counts confirm.
+# CD4-high and CD8-high) are doublet candidates.
 ggsave("17_counts_features.png", VlnPlot(pbmc, c("nCount_RNA", "nFeature_RNA"), pt.size = 0) + NoLegend(),
        width = 8, height = 5, dpi = 300)
 
 ggsave("18_percent_mt.png", VlnPlot(pbmc, "percent.mt", pt.size = 0) + NoLegend(),
        width = 6, height = 5, dpi = 300)
 
-# --- Unbiased markers ---
-# Downsampled: marker detection does not need every cell, and 55k is slow.
+# Unbiased markers
 all_markers <- FindAllMarkers(
   pbmc,
   only.pos = TRUE,
   min.pct = 0.25,
   logfc.threshold = 0.25,
-  max.cells.per.ident = 500)
+  max.cells.per.ident = 500,
+  random.seed = 42)
 
 top_markers <- all_markers %>%
   filter(p_val_adj < 0.05) %>%
@@ -291,11 +343,9 @@ print(top_markers, n = Inf)
 # 9. Final labels
 # ============================================================
 
-# Labels assigned from three converging lines of evidence: SingleR/Monaco
-# (lineage), ADT surface phenotype (CD3/CD4/CD8/CD14/CD19/CD56/CD16), and
-# unbiased RNA markers (section 8). Where they disagreed, protein and canonical
-# markers took precedence over the reference call.
-
+# Labels assigned from three pieces of evidence: SingleR/Monaco,
+# ADT surface phenotype, and unbiased RNA marker. 
+# Where they disagreed, protein and canonical markers took precedence over the reference call.
 cluster_labels <- c(
   "0" = "CD4 T naive", # FHIT, CCR7, LEF1, TCF7, MAL
   "1" = "CD4 T memory", # IL7R, LTB, IL32, GPR183, ITGB1
@@ -318,22 +368,15 @@ cluster_labels <- c(
 pbmc <- RenameIdents(pbmc, cluster_labels)
 pbmc$celltype <- Idents(pbmc)
 
-stopifnot(!any(is.na(pbmc$celltype)))
-table(pbmc$celltype)
-
 ggsave("19_umap_celltype.png",
        DimPlot(pbmc, group.by = "celltype", label = TRUE, repel = TRUE, label.size = 3) + NoLegend(),
        width = 8, height = 7, dpi = 300)
-
 
 # --- Remove non-cell and failed populations ---
 drop <- c("Low quality", "Platelet", "Mast/basophil prog", "Proliferating")
 
 pbmc <- subset(pbmc, subset = celltype %in% drop, invert = TRUE)
 pbmc$celltype <- droplevels(pbmc$celltype)
-
-table(pbmc$celltype)
-
 
 # --- Order levels sensibly for plotting ---
 pbmc$celltype <- factor(pbmc$celltype, levels = c(
@@ -375,7 +418,9 @@ pbmc$pb_sample <- paste(pbmc$sampleid, pbmc$batch, sep = "_")
 cells_per_group <- table(pbmc$celltype, pbmc$pb_sample)
 rowSums(cells_per_group >= 10)
 
-# Aggregate raw counts 
+# AggregateExpression() sums all counts across all cells sharing celltype and sample.
+# Returns a matrix of features x groups.
+# Summing keeps the raw counts for DESeq2.
 pseudo <- AggregateExpression(
   pbmc,
   assays = "RNA",
@@ -383,11 +428,7 @@ pseudo <- AggregateExpression(
   group.by = c("celltype", "pb_sample"),
   return.seurat = FALSE)$RNA
 
-dim(pseudo)
-head(colnames(pseudo))
-
-
-# --- Sample sheet ---
+# Sample sheet
 meta_pb <- data.frame(column = colnames(pseudo), stringsAsFactors = FALSE) %>%
   mutate(
     celltype = sub("_[0-9]+-[0-9]+$", "", column),

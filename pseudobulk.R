@@ -281,46 +281,64 @@ ggsave("13_adt_lineage_violin.png",
 
 # Subset markers, once lineage is settled
 adt_subset <- c("CD45RA-PROT", "CD45RO-PROT", "CD62L-PROT", "CD197-PROT",
-                "CD127-PROT", "CD25-PROT", "CD57-PROT", "TCRgd-PROT",
+                "CD127-PROT", "CD25-PROT", "CD57-PROT", "CD161-PROT",
+                "TCRgd-PROT", "CD279-PROT", "CD183-PROT",
                 "CD11c-PROT", "CD123-PROT", "CD1c-PROT", "CD303-PROT",
-                "CD20-PROT", "IgD-PROT", "CD34-PROT")
+                "CD20-PROT", "CD27-PROT", "IgD-PROT", "IgM-PROT", "CD34-PROT")
 
-ggsave("14_adt_subset_dotplot.png", DotPlot(pbmc, features = adt_subset) + RotatedAxis(),
-       width = 10, height = 6, dpi = 300)
+ggsave("14_adt_subset_dotplot.png",
+       DotPlot(pbmc, features = adt_subset) + RotatedAxis(),
+       width = 12, height = 7, dpi = 300)
 
 # Background
 # Signal sitting at isotype level is true negative; above it is real,
 # or ambient contamination.
 isotypes <- grep("sotype", rownames(pbmc[["ADT"]]), value = TRUE)
 
-ggsave("15_isotypes.png", VlnPlot(pbmc, isotypes, stack = TRUE, flip = TRUE) + NoLegend(),
+ggsave("15_isotypes.png",
+       VlnPlot(pbmc, isotypes, stack = TRUE, flip = TRUE, pt.size = 0) + NoLegend(),
        width = 7, height = 5, dpi = 300)
+
+ggsave("16_adt_cd4cd8_umap.png",
+       FeaturePlot(pbmc, c("CD3-PROT", "CD4-PROT", "CD8-PROT", "CD56-PROT"),
+                   ncol = 2, min.cutoff = "q05", max.cutoff = "q95"),
+       width = 10, height = 9, dpi = 300)
 
 # RNA markers as secondary evidence
 DefaultAssay(pbmc) <- "RNA"
 
 markers_rna <- c(
-  "CD3D", "CD3E",                  
-  "CD8A", "CD8B",                  
-  "IL7R", "CCR7", "SELL", "TCF7",  
-  "FOXP3", "IL2RA",               
-  "GZMK", "GZMB", "NKG7", "PRF1",  
-  "KLRD1", "NCAM1",               
-  "MS4A1", "CD79A",                
-  "LYZ", "CD14", "FCGR3A",      
-  "FCER1A", "CLEC9A",              
-  "CD34", "SPINK2", "PRSS57")      
+  "CD3D", "CD3E", # pan-T
+  "CD4", "CD8A", "CD8B", # T lineage split
+  "IL7R", "CCR7", "SELL", "TCF7", # naive / central memory
+  "FOXP3", "IL2RA", # Treg
+  "GZMK", "GZMB", "NKG7", "PRF1", # cytotoxic
+  "KLRD1", "NCAM1", "KLRB1", # NK, MAIT
+  "TRDC", "TRGC1", # gamma-delta
+  "MS4A1", "CD79A", "TCL1A", # B
+  "JCHAIN", "MZB1", # plasmablast
+  "LYZ", "CD14", "FCGR3A", "MS4A7", # monocytes
+  "FCER1A", "CLEC9A", "LILRA4", # cDC, pDC
+  "CD34", "SPINK2", "PRSS57", # progenitors
+  "PPBP", "PF4") # platelets
 
-ggsave("16_rna_markers_dotplot.png", DotPlot(pbmc, features = markers_rna) + RotatedAxis(),
-       width = 12, height = 6, dpi = 300)
+markers_rna <- intersect(markers_rna, rownames(pbmc))
 
-# Clusters showing mutually exclusive lineage markers (CD3+ and CD14+, or
-# CD4-high and CD8-high) are doublet candidates.
-ggsave("17_counts_features.png", VlnPlot(pbmc, c("nCount_RNA", "nFeature_RNA"), pt.size = 0) + NoLegend(),
+ggsave("17_rna_markers_dotplot.png",
+       DotPlot(pbmc, features = markers_rna) + RotatedAxis(),
+       width = 14, height = 7, dpi = 300)
+
+# Double and cell quality check
+# Clusters showing exclusive lineage markers (CD3+ and CD14+, or
+# CD4-high and CD8-high) are doublet candidates. 
+# Elevated nCount/nFeature relative to neighbouring clusters supports this.
+ggsave("18_counts_features.png",
+       VlnPlot(pbmc, c("nCount_RNA", "nFeature_RNA"), pt.size = 0, ncol = 1) + NoLegend(),
+       width = 10, height = 7, dpi = 300)
+
+ggsave("19_percent_mt.png",
+       VlnPlot(pbmc, "percent.mt", pt.size = 0) + NoLegend(),
        width = 8, height = 5, dpi = 300)
-
-ggsave("18_percent_mt.png", VlnPlot(pbmc, "percent.mt", pt.size = 0) + NoLegend(),
-       width = 6, height = 5, dpi = 300)
 
 # Unbiased markers
 all_markers <- FindAllMarkers(
@@ -331,80 +349,110 @@ all_markers <- FindAllMarkers(
   max.cells.per.ident = 500,
   random.seed = 42)
 
+write.csv(all_markers, "all_markers_leiden_res07.csv", row.names = FALSE)
+
+# Filter for genes with adjusted p-value < 0.05.
+# Rank by fold-change but require the gene to be expressed in at least 50% of the cluster.
 top_markers <- all_markers %>%
-  filter(p_val_adj < 0.05) %>%
+  filter(p_val_adj < 0.05, pct.1 > 0.5) %>%
   group_by(cluster) %>%
   slice_max(avg_log2FC, n = 10) %>%
   ungroup()
 
 print(top_markers, n = Inf)
 
+ggsave("20_top_markers_heatmap.png",
+       DoHeatmap(subset(pbmc, downsample = 100),
+                 features = top_markers$gene, size = 3) + NoLegend(),
+       width = 14, height = 16, dpi = 300)
+
 # ============================================================
 # 9. Final labels
 # ============================================================
+singler_by_cluster <- table(pbmc$leiden_res.0.7, pbmc$singler.main)
+majority <- colnames(singler_by_cluster)[max.col(singler_by_cluster)]
+names(majority) <- rownames(singler_by_cluster)
 
 # Labels assigned from three pieces of evidence: SingleR/Monaco,
 # ADT surface phenotype, and unbiased RNA marker. 
 # Where they disagreed, protein and canonical markers took precedence over the reference call.
-cluster_labels <- c(
-  "0" = "CD4 T naive", # FHIT, CCR7, LEF1, TCF7, MAL
-  "1" = "CD4 T memory", # IL7R, LTB, IL32, GPR183, ITGB1
-  "2" = "CD14 Mono", # S100A8/9/12, VCAN, LYZ, CD14
-  "3" = "CD8 T effector", # GZMH, FGFBP2, KLRG1, NKG7, CCL5
-  "4" = "NK", # KLRF1, SPON2, PRF1, GNLY, GZMB, CD56+CD16+
-  "5" = "B naive", # TCL1A, FCER2, VPREB3, MS4A1
-  "6" = "CD8 T memory", # GZMK, KLRB1, CD8B, DUSP2
-  "7" = "CD8 T naive", # CD8B, NELL2, CCR7, LEF1
-  "8" = "Low quality", # MALAT1 + MT- genes only; ~10% mito, lowest counts
-  "9" = "B memory", # TNFRSF13B, POU2AF1, BANK1, BLK
-  "10" = "CD16 Mono", # CDKN1C, MS4A7, C1QA, CSF1R, CD16-high CD14-low
-  "11" = "cDC2", # FCER1A, CLEC10A, CD1C
-  "12" = "CD14 Mono IFN", # FCGR1A/B, GBP1, WARS, APOBEC3A — activated state
-  "13" = "pDC", # LILRA4, CLEC4C, SCT, LAMP5
-  "14" = "Proliferating", # MKI67, TOP2A, CDK1, UBE2C — cell cycle, not doublets
-  "15" = "Mast/basophil prog", # TPSAB1, CPA3, CD34
-  "16" = "Platelet") # PF4, PPBP, GP9, ITGA2B, TUBB1
+final_label <- c(
+  # CD3+ CD4+ | CD62L-hi CD197(CCR7)-hi CD45RA+ CD127+ | RNA: CCR7, SELL, TCF7, LDHB, PIK3IP1, NOSIP
+  "1"  = "CD4 naive T",
+  
+  # CD3+ CD4+ | CD45RO-hi CD45RA-lo CD25-hi CD127+ | RNA: IL7R, LTB, IL32, CD69, ITGB1; CCR7/SELL absent
+  "2"  = "CD4 memory T",
+  
+  # CD14-hi CD16-neg HLA-DR+ CD11c+ | RNA: CD14, LYZ, S100A8/9/12, VCAN, LGALS2, MS4A6A
+  "3"  = "classical monocytes",
+  
+  # CD3+ CD8+ | CD57-hi CD62L-neg CD45RO+ | RNA: GZMH, GNLY, FGFBP2, NKG7, CST7, GZMA/GZMM
+  "4"  = "CD8 TEMRA",
+  
+  # CD3+ CD8+ | CD161-hi CD45RO-hi CD127+ CD279+ | RNA: GZMK, KLRB1, DUSP2, IL7R, CCL5
+  "5"  = "MAIT / CD8 EM",
+  
+  # CD3-neg | CD56-hi CD16-hi | RNA: KLRF1, KLRD1, SPON2, CLIC3, PRF1, GZMB, GNLY
+  "6"  = "NK",
+  
+  # CD19+ CD20-hi | IgD-hi IgM-hi CD27-neg | RNA: TCL1A, MS4A1, CD79A/B, HLA-DQ/DR
+  "7"  = "Naive B",
+  
+  # CD3+ CD8-hi | CD62L+ CD197-hi CD45RA+ | RNA: CD8B, CCR7, TCF7, SELL, NOSIP, PIK3IP1, LDHB
+  "8"  = "CD8 naive T",
+  
+  # No lineage-defining protein; percent.mt spans full 0-10% range
+  # RNA: only MT-* genes and MALAT1, several with pct.2 > pct.1 — QC artifact, not a cell type
+  "9"  = "Low quality",
+  
+  # CD19+ CD20-hi | CD27+ IgM+ IgD-lo CD11c+ | RNA: BANK1, MS4A1, CD79A/B, IGJ; TCL1A absent
+  "10" = "Memory B",
+  
+  # CD16-hi CD14-lo CD11c-hi | RNA: FCGR3A, MS4A7, CDKN1C, CSF1R, LST1, LILRB2, TCF7L2
+  "11" = "non-classical monocytes",
+  
+  # CD1c-hi CD11c+ HLA-DR-hi CD14-neg | RNA: FCER1A, CLEC10A, CD1C, CPVL, HLA-DPA1/DQA1
+  "12" = "cDC2",
+  
+  # CD14-hi CD16-neg CD11c+ (same lineage protein as cl.3)
+  # RNA: S100A8 + FCGR1A(CD64), FOLR3, GBP1, WARS, TNFSF10, TYMP — IFN-stimulated state
+  "13" = "activated classical monocytes",
+  
+  # CD303(CLEC4C)-hi CD123-hi CD11c-neg HLA-DR+ | RNA: LILRA4, CLEC4C, SCT, SERPINF1, DNASE1L3, LRRC26
+  "14" = "pDC",
+  
+  # CD3 + CD4 + CD8 + CD19 + CD16 all positive in one cluster (mutually exclusive lineages)
+  # RNA: MKI67, TYMS, RRM2, TK1, PCNA, STMN1 — cycling signature, but protein says doublet
+  "15" = "Doublets",
+  
+  # All lineage proteins flat
+  # RNA: SDPR(CAVIN2), PPBP, PF4, HIST1H2AC, TSC22D1 — unambiguous platelet
+  "16" = "Platelets")
 
-pbmc <- RenameIdents(pbmc, cluster_labels)
-pbmc$celltype <- Idents(pbmc)
+lab <- unname(final_label[as.character(pbmc$leiden_res.0.7)])
+names(lab) <- colnames(pbmc)
+pbmc$celltype <- lab
 
-ggsave("19_umap_celltype.png",
-       DimPlot(pbmc, group.by = "celltype", label = TRUE, repel = TRUE, label.size = 3) + NoLegend(),
+celltype_levels <- c(
+  "CD4 naive T", "CD4 memory T",
+  "CD8 naive T", "CD8 TEMRA", "MAIT / CD8 EM",
+  "NK",
+  "Naive B", "Memory B",
+  "classical monocytes", "activated classical monocytes", "non-classical monocytes",
+  "cDC2", "pDC",
+  "Platelets", "Doublets", "Low quality")
+
+pbmc$celltype <- factor(pbmc$celltype, levels = celltype_levels)
+Idents(pbmc) <- "celltype"
+
+ggsave("21_umap_celltype.png",
+       DimPlot(pbmc, label = TRUE, repel = TRUE, label.size = 3) + NoLegend(),
        width = 8, height = 7, dpi = 300)
 
 # --- Remove non-cell and failed populations ---
-drop <- c("Low quality", "Platelet", "Mast/basophil prog", "Proliferating")
-
-pbmc <- subset(pbmc, subset = celltype %in% drop, invert = TRUE)
-pbmc$celltype <- droplevels(pbmc$celltype)
-
-# --- Order levels sensibly for plotting ---
-pbmc$celltype <- factor(pbmc$celltype, levels = c(
-  "CD4 T naive", "CD4 T memory",
-  "CD8 T naive", "CD8 T memory", "CD8 T effector",
-  "NK",
-  "B naive", "B memory",
-  "CD14 Mono", "CD14 Mono IFN", "CD16 Mono",
-  "cDC2", "pDC"))
-
-Idents(pbmc) <- "celltype"
-
-DimPlot(pbmc, group.by = "celltype", label = TRUE, repel = TRUE, label.size = 3) +
-  NoLegend()
-
-# --- Final sanity check ---
-# Confirm labels against protein. Each population should be positive for the
-# markers that define it and at isotype level for the others.
-DefaultAssay(pbmc) <- "ADT"
-ggsave("20_adt_final_dotplot.png",
-       DotPlot(pbmc, features = c("CD3-PROT", "CD4-PROT", "CD8-PROT", "CD45RA-PROT",
-                                  "CD45RO-PROT", "CD62L-PROT", "CD56-PROT", "CD16-PROT",
-                                  "CD19-PROT", "IgD-PROT", "CD14-PROT", "HLA-DR-PROT",
-                                  "CD123-PROT", "CD34-PROT")) + RotatedAxis(),
-       width = 12, height = 6, dpi = 300)
-DefaultAssay(pbmc) <- "RNA"
-
-saveRDS(pbmc, "pbmc_pseudobulk_annotated.rds")
+pbmc.clean <- subset(pbmc, subset = celltype %in%
+                       c("Low quality", "Doublets", "Platelets"), invert = TRUE)
+saveRDS(pbmc.clean, "pbmc_annotated.rds")
 
 # ============================================================
 # 10. Pseudobulk

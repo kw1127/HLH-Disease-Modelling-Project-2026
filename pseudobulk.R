@@ -615,6 +615,29 @@ pheatmap(as.matrix(sampleDists),
          main = "Sample distances (VST)")
 dev.off()
 
+# CD8 TEMRA vs CD8 naive T — direct level-vs-level, ref is already CD8 naive T
+res_temra <- results(dds_ct,
+                     contrast = c("celltype", "CD8 TEMRA", "CD8 naive T"),
+                     alpha = 0.05)
+
+# NK vs pooled naive — an average of two levels, so it needs a numeric contrast.
+# Group means: CD8naive = b0, CD4naive = b0 + b_CD4, NK = b0 + b_NK
+# Pooled naive  = b0 + b_CD4/2   ->   NK - pooled = b_NK - 0.5 * b_CD4
+rn <- resultsNames(dds_ct)
+
+coef_of <- function(lvl) {
+  hit <- grep(paste0("^celltype_", make.names(lvl), "_vs_"), rn, value = TRUE)
+  stopifnot(length(hit) == 1L)
+  hit
+}
+
+con <- setNames(numeric(length(rn)), rn)
+con[coef_of("NK")] <-  1
+con[coef_of("CD4 naive T")] <- -0.5
+# CD8 naive T is the reference, its coefficient is 0 by construction
+
+res_nk <- results(dds_ct, contrast = unname(con), alpha = 0.05)
+
 hlh_chr <- as.character(hlh)
 anchors <- c("GNLY", "NKG7", "GZMB", "CCL5", "CD3D", "CCR7", "SELL", "TCF7")
 
@@ -624,7 +647,7 @@ volcano <- function(res, title, file, cap = 150) {
     rownames_to_column("gene") |>
     filter(!is.na(padj)) |>
     mutate(
-      y   = pmin(-log10(padj), cap),
+      y = pmin(-log10(padj), cap),
       sig = case_when(padj < 0.05 & log2FoldChange >  1 ~ "Up in effector",
                       padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
                       TRUE ~ "n.s."))

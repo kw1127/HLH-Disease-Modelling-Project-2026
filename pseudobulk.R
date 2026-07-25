@@ -21,6 +21,7 @@
   library(leidenbase)
   library(mclust)
   library(patchwork)
+  library(ggrepel)
   
   set.seed(42)
   # ============================================================
@@ -615,94 +616,65 @@ pheatmap(as.matrix(sampleDists),
 dev.off()
 
 hlh_chr <- as.character(hlh)
+anchors <- c("GNLY", "NKG7", "GZMB", "CCL5", "CD3D", "CCR7", "SELL", "TCF7")
 
-run_contrast <- function(dds, res, tag, label) {
-  # res: a DESeqResults object already computed by the caller
-  cat("\n==================  ", label, "  ==================\n", sep = "")
-  cat("--- summary ---\n"); summary(res)
+volcano <- function(res, title, file, cap = 150) {
   
-  # HLH sanity: expect POSITIVE stat (up in the effector)
-  hlh_in <- intersect(hlh_chr, rownames(res))
-  cat("\n--- HLH genes (expect positive stat) ---\n")
-  print(round(as.data.frame(
-    res[hlh_in, c("baseMean","log2FoldChange","stat","padj")]), 3))
-  
-  # volcano (unshrunken LFC is fine for display here; label HLH always)
-  vdf <- as.data.frame(res) |>
+  df <- as.data.frame(res) |>
     rownames_to_column("gene") |>
-    filter(!is.na(padj))
-  vdf$cat <- with(vdf, ifelse(padj < 0.05 & log2FoldChange >  1, "up_effector",
-                              ifelse(padj < 0.05 & log2FoldChange < -1, "up_naive", "ns")))
-  labs_df <- vdf |> filter(cat != "ns") |> group_by(cat) |>
-    slice_min(padj, n = 12) |> ungroup() |>
-    bind_rows(filter(vdf, gene %in% hlh_in))
+    filter(!is.na(padj)) |>
+    mutate(
+      y   = pmin(-log10(padj), cap),
+      sig = case_when(padj < 0.05 & log2FoldChange >  1 ~ "Up in effector",
+                      padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
+                      TRUE ~ "n.s."))
   
-  p <- ggplot(vdf, aes(log2FoldChange, -log10(padj))) +
-    geom_point(aes(colour = cat), size = 0.9, alpha = 0.7) +
-    scale_colour_manual(values = c(up_effector="firebrick",
-                                   up_naive="steelblue", ns="grey75")) +
-    geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey50") +
-    geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey50") +
-    ggrepel::geom_text_repel(data = labs_df, aes(label = gene),
-                             size = 3, max.overlaps = 20, min.segment.length = 0) +
-    labs(x = "log2 fold change", y = "-log10 adjusted p",
-         title = label, colour = NULL) +
+  ggplot(df, aes(log2FoldChange, y)) +
+    geom_point(aes(colour = sig), size = 0.7, alpha = 0.4) +
+    scale_colour_manual(values = c("Up in effector" = "#C0504D",
+                                   "Up in naive"    = "#4F81BD",
+                                   "n.s."           = "grey80"), name = NULL) +
+    geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
+    geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
+    
+    # anchor markers, for orientation
+    geom_text_repel(data = filter(df, gene %in% anchors),
+                    aes(label = gene), size = 3, colour = "grey25",
+                    fontface = "italic", max.overlaps = Inf, seed = 42,
+                    ylim = c(NA, cap * 0.9), nudge_y = -8,
+                    box.padding = 0.5,
+                    segment.colour = "grey60", segment.size = 0.3) +
+    
+    # HLH genes, the subject
+    geom_point(data = filter(df, gene %in% hlh_chr),
+               colour = "#1B7837", size = 2.5, shape = 18) +
+    geom_text_repel(data = filter(df, gene %in% hlh_chr),
+                    aes(label = gene), size = 3.5, colour = "#1B7837",
+                    fontface = "bold", max.overlaps = Inf, seed = 42,
+                    ylim = c(NA, cap * 0.9), nudge_y = -8,
+                    box.padding = 0.5,
+                    segment.colour = "#1B7837", segment.size = 0.3) +
+    
+    labs(x = "log2 fold change", y = "-log10 (padj)", title = title,
+         caption = sprintf("y-axis capped at %g", cap)) +
     theme_bw()
-  ggsave(sprintf("26_volcano_%s.png", tag), p, width = 9, height = 7, dpi = 300)
   
-  # decoupleR handoff: FULL Wald stat, no filter, no shrinkage
-  s <- res$stat; names(s) <- rownames(res); s <- s[!is.na(s)]
-  cat("\n--- stat vector [", tag, "]:", length(s), "genes ---\n")
-  
-  write.csv(as.data.frame(res), sprintf("de_%s.csv", tag))
-  saveRDS(res, sprintf("res_%s.rds", tag))
-  saveRDS(s, sprintf("stat_%s.rds", tag))
-  s
+  ggsave(file, width = 9, height = 7, dpi = 300)
 }
 
-# Contrast 1: CD8 TEMRA vs CD8 naive
-res_temra <- results(dds_ct,
-                     contrast = c("celltype", "CD8 TEMRA", "CD8 naive T"),
-                     alpha = 0.05)
+volcano(res_temra, "CD8 TEMRA vs CD8 naive T", "26_volcano_temra.png")
+volcano(res_nk, "NK vs pooled naive (CD4 + CD8 naive T)", "27_volcano_nk.png")
 
-stat_temra <- run_contrast(dds_ct, res_temra, "temra_vs_cd8naive",
-                           "CD8 TEMRA vs CD8 naive T")
+stat_temra <- setNames(res_temra$stat, rownames(res_temra))
+stat_nk <- setNames(res_nk$stat, rownames(res_nk))
+stat_temra <- stat_temra[!is.na(stat_temra)]
+stat_nk <- stat_nk[!is.na(stat_nk)]
 
-# --- HLH genes (expect positive stat) ---
-#          baseMean         log2FoldChange   stat    padj
-# PRF1     201.680          4.972            28.945  0.000
-# UNC13D   14.590           0.312            2.260   0.049
-# STX11    3.193            2.467            5.684   0.000
-# STXBP2   22.791           0.363            3.247   0.003
-# RAB27A   18.983           1.917            13.643  0.000
-# LYST     15.505           1.697            8.311   0.000
-# SH2D1A   25.800           1.318            9.113   0.000
-# XIAP     8.122           -0.169           -0.978   0.444
+saveRDS(stat_temra, "stat_temra.rds")
+saveRDS(stat_nk, "stat_nk.rds")
+write.csv(as.data.frame(res_temra), "de_temra.csv")
+write.csv(as.data.frame(res_nk), "de_nk.csv")
 
-# Contrast 2: NK vs pooled naive (CD4 + CD8 naive T)
-rn <- resultsNames(dds_ct)
-nk_coef <- grep("celltype_NK_vs_CD8.naive", rn, value = TRUE)
-cd4_coef <- grep("celltype_CD4.naive.*vs_CD8.naive", rn, value = TRUE)
-stopifnot(length(nk_coef) == 1, length(cd4_coef) == 1)
-
-res_nk <- results(dds_ct,
-                  contrast = list(nk_coef, cd4_coef),
-                  listValues = c(1, -0.5),
-                  alpha = 0.05)
-
-stat_nk <- run_contrast(dds_ct, res_nk, "nk_vs_pooled_naive",
-                        "NK vs pooled naive (CD4 + CD8 naive T)")
-
-# HLH genes (expect positive stat) ---
-#        baseMean  log2FoldChange   stat     padj
-#PRF1    201.680   6.946            58.219   0.000
-#UNC13D  14.590    0.650            6.372    0.000
-#STX11   3.193     2.082            7.299    0.000
-#STXBP2  22.791    0.588            7.023    0.000
-#RAB27A  18.983    1.782            17.637   0.000
-#LYST    15.505    1.818            11.768   0.000
-#SH2D1A  25.800    1.098            9.630    0.000
-#XIAP    8.122    -0.398           -2.733    0.011
 # ============================================================
 # 11. TF activity (decoupleR + CollecTRI)
 # ============================================================

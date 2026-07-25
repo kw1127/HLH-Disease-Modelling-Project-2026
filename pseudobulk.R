@@ -515,7 +515,12 @@
   table(meta_pb$celltype)
   
   # ============================================================
-  # 11. Differential expression analysis with DESeq2
+  # 11. Differential expression for regulatory-network inference
+  #
+  #     Two healthy cytotoxic networks will be built downstream:
+  #       - NK : contrast NK vs pooled naive (CD4 + CD8 naive T)
+  #       - CD8 TEMRA : contrast  CD8 TEMRA vs CD8 naive T
+  #
   # ============================================================
   DefaultAssay(pbmc.clean) <- "RNA"
   
@@ -545,78 +550,159 @@ dot_hlh <- DotPlot(pbmc.clean, features = levels(hlh)) +
 
 ggsave("22_hlh_dotplot.png", dot_hlh, width = 8, height = 5)
 
-effector <- c("NK", "CD8 TEMRA")
+effectors <- c("NK", "CD8 TEMRA")
 naive <- c("CD8 naive T", "CD4 naive T")
+used <- c(effectors, naive)
 
 # subset the pseudobulked counts + metadata to the cell types selected
-keep_cols <- meta_pb$celltype %in% c(effector, naive)
-
-meta_sub  <- droplevels(meta_pb[keep_cols, , drop = FALSE])
-
+keep_cols <- meta_pb$celltype %in% used
+meta_sub <- droplevels(meta_pb[keep_cols, , drop = FALSE])
 pseudo_sub <- pseudo[, rownames(meta_sub), drop = FALSE]
 
-meta_sub$group <- factor(
-  ifelse(meta_sub$celltype %in% effector, "effector", "naive"),
-  levels = c("naive", "effector") # naive = reference
-)
+meta_sub$celltype <- relevel(factor(meta_sub$celltype), ref = "CD8 naive T")
 
-# 11.3 enforce an estimable donor-blocked design 
-# pb_sample is only usable as a blocking factor for samples that contribute
-# BOTH an effector and a naive column. Samples in only one group must go,
-# otherwise ~ pb_sample + group is rank-deficient.
-grp_by_sample <- table(meta_sub$pb_sample, meta_sub$group)
-complete <- rownames(grp_by_sample)[
-  grp_by_sample[, "effector"] > 0 & grp_by_sample[, "naive"] > 0
-]
-cat("\n--- pb_samples contributing BOTH groups:", length(complete),
-    "of", nlevels(meta_sub$pb_sample), "---\n")
-dropped <- setdiff(levels(meta_sub$pb_sample), complete)
-if (length(dropped))
-  cat("    dropping (single-group only):", paste(dropped, collapse = ", "), "\n")
+cols_per_sample <- table(meta_sub$pb_sample)
+usable_samples <- names(cols_per_sample)[cols_per_sample >= 2]
+dropped <- setdiff(levels(factor(meta_sub$pb_sample)), usable_samples)
 
-meta_sub <- droplevels(meta_sub[meta_sub$pb_sample %in% complete, , drop = FALSE])
+meta_sub <- droplevels(meta_sub[meta_sub$pb_sample %in% usable_samples, , drop = FALSE])
 pseudo_sub <- pseudo_sub[, rownames(meta_sub), drop = FALSE]
 
-if (nlevels(meta_sub$pb_sample) < 2)
-  stop("Fewer than 2 samples span both groups; paired design not estimable. ",
-       "Fall back to ~ batch + group, or ~ group.")
-
-# rank check BEFORE handing to DESeq2
-mm <- model.matrix(~ pb_sample + group, meta_sub)
-if (qr(mm)$rank < ncol(mm))
-  stop("Rank-deficient design (rank ", qr(mm)$rank, " < ", ncol(mm),
-       " cols). A pb_sample is still unbalanced across groups.")
-cat("--- design full rank:", qr(mm)$rank, "==", ncol(mm), "OK\n")
-
-dds_sub <- DESeqDataSetFromMatrix(
+# build the DESeq2 object
+dds_ct <- DESeqDataSetFromMatrix(
   countData = pseudo_sub,
   colData = meta_sub,
-  design = ~ pb_sample + group
+  design = ~ pb_sample + celltype
 )
 
-keep <- rowSums(counts(dds_sub) >= 5) >= min(table(meta_sub$group))
-dds_sub <- dds_sub[keep, ]
+min_grp <- min(table(meta_sub$celltype))
+keep <- rowSums(counts(dds_ct) >= 5) >= min_grp
+dds_ct <- dds_ct[keep, ]
 
-dds_sub <- estimateSizeFactors(dds_sub, type = "poscounts")
+dds_ct <- estimateSizeFactors(dds_ct, type = "poscounts")
 
-vsd_sub <- vst(dds_sub, blind = TRUE)
-mat_sub <- assay(vsd_sub)
+# VST for visualisation
+vsd_ct <- vst(dds_ct, blind = TRUE)
+mat_ct <- assay(vsd_ct)
 
-pca_df <- plotPCA(vsd_sub, intgroup = c("group", "celltype", "batch"),
-                  returnData = TRUE)
-
+# PCA: cell types cleanly separate
+pca_df <- plotPCA(vsd_ct, intgroup = c("celltype", "batch"), returnData = TRUE)
 pv <- round(100 * attr(pca_df, "percentVar"))
-
 p_pca <- ggplot(pca_df, aes(PC1, PC2, colour = celltype, shape = batch)) +
   geom_point(size = 3, alpha = 0.85) +
   labs(x = sprintf("PC1: %d%%", pv[1]), y = sprintf("PC2: %d%%", pv[2]),
-       title = "Effector vs naive pseudobulk (VST)") +
+       title = "Lymphoid pseudobulk (VST)") +
   theme_bw()
-ggsave("23_pca_effector_naive.png", p_pca, width = 8, height = 5, dpi = 300)
+ggsave("23_pca_lymphoid.png", p_pca, width = 8, height = 5, dpi = 300)
 
 # run DESeq2
-dds_sub <- DESeq(dds_sub)
+dds_ct <- DESeq(dds_ct, quiet = TRUE)
 
+png("24_dispersions_lymphoid.png", width = 7, height = 6, units = "in", res = 300)
+plotDispEsts(dds_ct, main = "Dispersion plot: lymphoid fit")
+dev.off()
+
+# Sample-distance heatmap (shared, VST-based)
+sampleDists <- dist(t(mat_ct))
+ann <- as.data.frame(colData(dds_ct)[, c("celltype", "batch")])
+png("25_sample_distance_lymphoid.png", width = 9, height = 8, units = "in", res = 300)
+pheatmap(as.matrix(sampleDists),
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         annotation_col = ann, show_rownames = FALSE, show_colnames = FALSE,
+         color = colorRampPalette(rev(brewer.pal(9, "Blues")))(255),
+         main = "Sample distances (VST)")
+dev.off()
+
+hlh_chr <- as.character(hlh)
+
+run_contrast <- function(dds, res, tag, label) {
+  # res: a DESeqResults object already computed by the caller
+  cat("\n==================  ", label, "  ==================\n", sep = "")
+  cat("--- summary ---\n"); summary(res)
+  
+  # HLH sanity: expect POSITIVE stat (up in the effector)
+  hlh_in <- intersect(hlh_chr, rownames(res))
+  cat("\n--- HLH genes (expect positive stat) ---\n")
+  print(round(as.data.frame(
+    res[hlh_in, c("baseMean","log2FoldChange","stat","padj")]), 3))
+  
+  # volcano (unshrunken LFC is fine for display here; label HLH always)
+  vdf <- as.data.frame(res) |>
+    rownames_to_column("gene") |>
+    filter(!is.na(padj))
+  vdf$cat <- with(vdf, ifelse(padj < 0.05 & log2FoldChange >  1, "up_effector",
+                              ifelse(padj < 0.05 & log2FoldChange < -1, "up_naive", "ns")))
+  labs_df <- vdf |> filter(cat != "ns") |> group_by(cat) |>
+    slice_min(padj, n = 12) |> ungroup() |>
+    bind_rows(filter(vdf, gene %in% hlh_in))
+  
+  p <- ggplot(vdf, aes(log2FoldChange, -log10(padj))) +
+    geom_point(aes(colour = cat), size = 0.9, alpha = 0.7) +
+    scale_colour_manual(values = c(up_effector="firebrick",
+                                   up_naive="steelblue", ns="grey75")) +
+    geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey50") +
+    geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey50") +
+    ggrepel::geom_text_repel(data = labs_df, aes(label = gene),
+                             size = 3, max.overlaps = 20, min.segment.length = 0) +
+    labs(x = "log2 fold change", y = "-log10 adjusted p",
+         title = label, colour = NULL) +
+    theme_bw()
+  ggsave(sprintf("26_volcano_%s.png", tag), p, width = 9, height = 7, dpi = 300)
+  
+  # decoupleR handoff: FULL Wald stat, no filter, no shrinkage
+  s <- res$stat; names(s) <- rownames(res); s <- s[!is.na(s)]
+  cat("\n--- stat vector [", tag, "]:", length(s), "genes ---\n")
+  
+  write.csv(as.data.frame(res), sprintf("de_%s.csv", tag))
+  saveRDS(res, sprintf("res_%s.rds", tag))
+  saveRDS(s, sprintf("stat_%s.rds", tag))
+  s
+}
+
+# Contrast 1: CD8 TEMRA vs CD8 naive
+res_temra <- results(dds_ct,
+                     contrast = c("celltype", "CD8 TEMRA", "CD8 naive T"),
+                     alpha = 0.05)
+
+stat_temra <- run_contrast(dds_ct, res_temra, "temra_vs_cd8naive",
+                           "CD8 TEMRA vs CD8 naive T")
+
+# --- HLH genes (expect positive stat) ---
+#          baseMean         log2FoldChange   stat    padj
+# PRF1     201.680          4.972            28.945  0.000
+# UNC13D   14.590           0.312            2.260   0.049
+# STX11    3.193            2.467            5.684   0.000
+# STXBP2   22.791           0.363            3.247   0.003
+# RAB27A   18.983           1.917            13.643  0.000
+# LYST     15.505           1.697            8.311   0.000
+# SH2D1A   25.800           1.318            9.113   0.000
+# XIAP     8.122           -0.169           -0.978   0.444
+
+# Contrast 2: NK vs pooled naive (CD4 + CD8 naive T)
+rn <- resultsNames(dds_ct)
+nk_coef <- grep("celltype_NK_vs_CD8.naive", rn, value = TRUE)
+cd4_coef <- grep("celltype_CD4.naive.*vs_CD8.naive", rn, value = TRUE)
+stopifnot(length(nk_coef) == 1, length(cd4_coef) == 1)
+
+res_nk <- results(dds_ct,
+                  contrast = list(nk_coef, cd4_coef),
+                  listValues = c(1, -0.5),
+                  alpha = 0.05)
+
+stat_nk <- run_contrast(dds_ct, res_nk, "nk_vs_pooled_naive",
+                        "NK vs pooled naive (CD4 + CD8 naive T)")
+
+# HLH genes (expect positive stat) ---
+#        baseMean  log2FoldChange   stat     padj
+#PRF1    201.680   6.946            58.219   0.000
+#UNC13D  14.590    0.650            6.372    0.000
+#STX11   3.193     2.082            7.299    0.000
+#STXBP2  22.791    0.588            7.023    0.000
+#RAB27A  18.983    1.782            17.637   0.000
+#LYST    15.505    1.818            11.768   0.000
+#SH2D1A  25.800    1.098            9.630    0.000
+#XIAP    8.122    -0.398           -2.733    0.011
 # ============================================================
 # 11. TF activity (decoupleR + CollecTRI)
 # ============================================================

@@ -1,3 +1,16 @@
+# =============================================================================
+# Regulation of the degranulation programme in healthy cytotoxic effectors
+#
+# Dataset: Kotliarov et al. CITE-seq PBMC, 20 healthy donors, 2 batches.
+# Aim: map how the primary HLH-associated genes are regulated in NK cells and
+#      CD8 TEMRA, and build signalling networks that explain the transcription
+#      factor activity of those effector states.
+#
+# Pipeline: QC -> annotation (RNA + protein) -> pseudobulk -> differential
+#           expression -> TF activity -> prior knowledge network -> CARNIVAL
+# =============================================================================
+
+
   # ============================================================
   # 0. Load packages
   # ============================================================
@@ -23,43 +36,48 @@
   library(patchwork)
   library(ggrepel)
   
+  # Fixes the random number generator so that anything stochastic (UMAP,
+  # clustering, downsampling) gives the same answer every time the script runs.
   set.seed(42)
+  
   # ============================================================
   # 1. Load data
   # ============================================================
   
   # A healthy pbmc scRNA-seq dataset of 20 samples from 2 experimental batches (10 samples each batch)
   kotliarov <- KotliarovPBMCData(
-    mode = c("rna", "adt"),
-    ensembl = FALSE,
-    location = TRUE,
-    legacy = FALSE)
+    mode = c("rna", "adt"), # load both RNA and ADT modalities
+    ensembl = FALSE, # keep gene symbols rather than ENSEMBL IDs
+    location = TRUE, # Attach chromosome location metadata to genes
+    legacy = FALSE) # Use current version of the object
   
-  # Create seurat object 
+  # Convert to a seurat object
   pbmc <- CreateSeuratObject(
-    counts = counts(kotliarov),
-    meta.data = as.data.frame(colData(kotliarov)))
+    counts = counts(kotliarov), # pulls the raw count matrix
+    meta.data = as.data.frame(colData(kotliarov))) # pulls the per-cell metadata
   
-  # What is the donor/batch column for pseudobulking? 
+  # Inspect metadata columns to find donor and batch columns needed for pseudobulking later
   colnames(pbmc@meta.data)
   
   # ============================================================
   # 2. Quality control
   # ============================================================
   
-  # Adds a per-cell QC metric to the Seurat object's metadata as a new column "percent.mt".
-  # Finds all features with the "MT-" prefix and sums their counts per cell, 
-  # divides by that cell's total counts, and multiplies by 100.
-  # Results: for each cell, the percentage of its transcripts coming from the mitochondrial genome.
+  # Mitochondrial percentage per cell.
+  # PercentageFeatureSet finds all genes whose name starts with "MT-" (the
+  # mitochondrial genome), sums their counts in each cell, divides by that cell's
+  # total counts, and multiplies by 100.
+  # A high value means most of the cell's RNA is mitochondrial, which happens when
+  # a cell is dying: the membrane ruptures, cytoplasmic RNA leaks out, and the
+  # mitochondrial RNA is left behind.
   pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
   
-  # Plot the distribution of three QC metrics.
-  # nFeature_RNA: number of features (genes) expressed per cell
-  # nCount_RNA: number of individual transcripts (UMIs) per cell
-  # percent.mt: percentage of a cell's transcripts mapping to mitochondrial genes
-  # ncol = 3 arranges the three panels side by side in one row.
-  # Cells with very low nFeature_RNA (empty/poor droplets), very high counts (potential doublets),
-  # or high percent.mt (dying/lysed cells).
+  # Distributions of the three standard QC metrics.
+  #   nFeature_RNA = how many distinct genes were detected in that cell
+  #   nCount_RNA   = how many transcripts (UMIs) total in that cell
+  #   percent.mt   = the mitochondrial fraction computed above
+  # Interpretation: very low nFeature = empty or failed droplet; very high
+  # nCount = possible two cells in one droplet (doublet); high percent.mt = dying.
   p_qc_vln <- VlnPlot(pbmc, c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.05)
   ggsave("01_qc_violin.png", p_qc_vln, width = 10, height = 4, dpi = 300)
   
@@ -833,10 +851,21 @@ tf_contrast <- run_ulm(
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH"))
 
 # ============================================================
-# 12. Prepare CARNIVAL inputs
+# 12. Prior knowledge network and CARNIVAL inputs
+#
+#     Signalling layer -> couple TF->HLH edges -> prune per cell type
+#     The CollecTRI edges must be present before pruning so the
+#     expression filter applies to them too, and baseline and
+#     counterfactual runs must share identical topology so that a node
+#     flip reflects the constraint, not a change in the network.
+# 
 # ============================================================
 
-# Extract TF activities
+# TF activities as CARNIVAL measurements
+
+# CARNIVAL is an ILP; runtime scales with the number of
+# measurements, so take the most confident TFs rather than everything
+# that clears FDR.
 make_measobj <- function(contrast, n_top = 50) {
   tf_contrast %>%
     dplyr::filter(condition == contrast, p_adj < 0.05) %>%
@@ -849,52 +878,49 @@ make_measobj <- function(contrast, n_top = 50) {
 meas_temra <- make_measobj("CD8 TEMRA")
 meas_nk <- make_measobj("NK")
 
-# export as rds for carnival
-saveRDS(meas_temra, "meas_temra.rds")
-saveRDS(meas_nk, "meas_nk.rds")
+tf_all <- union(colnames(meas_temra), colnames(meas_nk))
 
-# Import prior knowledge network from OmniPath
-ppi <- omnipath_interactions() # 85,217 interactions
 
-# Build a signed, directed prior knowledge network (PKN) for CARNIVAL from OmniPath PPIs
+# Signalling layer from OmniPath
+ppi <- omnipath_interactions()      
 
-# Signalling layer includes directed and unambiguously signed interactions.
-# Curation_effort >= 2 was chosen.
-# >=3 loses key interactions involved in HLH gene regulation.
-# >=1 gives ~70k edges which is too big for solving a network.
 sig_all <- ppi %>%
-  dplyr::filter(consensus_direction == 1,
-                consensus_stimulation + consensus_inhibition == 1) %>%
+  dplyr::filter(consensus_direction == 1, # agreed direction source -> target
+                consensus_stimulation + consensus_inhibition == 1) %>% # unambiguously signed
   dplyr::mutate(interaction = ifelse(consensus_stimulation == 1, 1L, -1L)) %>%
   dplyr::select(source = source_genesymbol, interaction,
                 target = target_genesymbol, curation_effort) %>%
-  dplyr::filter(source != "", target != "", source != target) %>%
-  dplyr::group_by(source, interaction, target) %>%         
+  dplyr::filter(source != "", # unmapped symbols would collapse into one phantom hub
+                target != "",
+                source != target) %>% # self-loops: one state per node, so vacuous or contradictory
+  dplyr::group_by(source, interaction, target) %>%
   dplyr::summarise(curation_effort = max(curation_effort), .groups = "drop")
+# nrow(sig_all) = 70,565 unique signed directed edges
 
-# nrow(sig_all) returns 70,565 interactions
 
-expressed_ct <- rownames(mat_ct)                                        
-expressed_lax <- rownames(pseudo_sub)[rowSums(pseudo_sub >= 1) >= 5]     
+# Choosing the curation and expression thresholds
+# Two candidate gene universes:
+#   strict = the DESeq2 filter (>=5 counts in >= min_grp samples). Designed
+#   for stable dispersion estimates, so it is stricter than a
+#   presence filter needs to be and drops low-abundance
+#   signalling proteins.
+#   lax = presence filter (>=1 count in >=5 lymphoid pseudobulk samples).
+expressed_ct <- rownames(mat_ct)
+expressed_lax <- rownames(pseudo_sub)[rowSums(pseudo_sub >= 1) >= 5]
 c(strict = length(expressed_ct), lax = length(expressed_lax))
-
-# ---- grid: curation threshold x universe ----
-tf_all <- union(colnames(meas_temra), colnames(meas_nk))
 
 check <- function(ce, universe, label) {
   s <- sig_all %>%
     dplyr::filter(curation_effort >= ce,
                   source %in% universe, target %in% universe)
-  nodes <- unique(c(s$source, s$target))
+  nodes  <- unique(c(s$source, s$target))
   in_deg <- table(s$target)
-  reach <- intersect(tf_all, nodes)
-  data.frame(
-    universe = label,
-    curation = ce,
-    edges = nrow(s),
-    nodes = length(nodes),
-    tf_present = length(reach),
-    tf_with_in = sum(reach %in% names(in_deg)))   # TFs that can actually be explained
+  reach  <- intersect(tf_all, nodes)
+  data.frame(universe = label, curation = ce,
+             edges = nrow(s), nodes = length(nodes),
+             tf_present = length(reach),
+             # a TF with no incoming edge can never be explained by any solution
+             tf_with_in = sum(reach %in% names(in_deg)))
 }
 
 grid <- do.call(rbind, c(
@@ -902,5 +928,193 @@ grid <- do.call(rbind, c(
   lapply(1:4, check, universe = expressed_lax, label = "lax")))
 grid
 
+# Decision: lax universe, curation_effort >= 3.
+#   The expression filter dominates: strict excludes 9-10 reachable TFs at
+#   every curation level (32 vs 42 at curation effort >=1).
+#   Within the lax universe, curation effort >=3 is the elbow: relaxing to >=2 buys one
+#   extra TF for 2,331 extra edges; tightening to >=4 saves 1,283 edges but
+#   costs two TFs.
+sig <- sig_all %>%
+  dplyr::filter(curation_effort >= 3,
+                source %in% expressed_lax, target %in% expressed_lax) %>%
+  dplyr::select(source, interaction, target)
+
+nrow(sig)
 
 
+# 12.4 Couple the transcriptional layer
+# The HLH genes are terminal effectors. They have regulators but no downstream
+# signalling. Adding TF -> HLH edges from CollecTRI lets them enter the
+# model as measurable endpoints rather than as perturbation nodes.
+# Require the TF to already sit in the signalling layer, otherwise it
+# enters as a free upstream parameter with nothing constraining it.
+trn <- collectri %>%
+  dplyr::filter(target %in% hlh_chr,
+                source %in% c(sig$source, sig$target)) %>%
+  dplyr::mutate(interaction = as.integer(mor)) %>%
+  dplyr::select(source, interaction, target) %>%
+  dplyr::distinct()
+
+pkn <- dplyr::bind_rows(sig, trn) %>% dplyr::distinct()
+
+c(signalling = nrow(sig), transcriptional = nrow(trn), combined = nrow(pkn))
+
+# restrict measurements to nodes the PKN contains
+pkn_nodes <- unique(c(pkn$source, pkn$target))
+meas_temra <- meas_temra[, colnames(meas_temra) %in% pkn_nodes, drop = FALSE]
+meas_nk <- meas_nk[, colnames(meas_nk) %in% pkn_nodes, drop = FALSE]
+dim(meas_temra); dim(meas_nk)
+
+saveRDS(pkn, "pkn_full.rds")
+
+
+# 12.5 Audit: how can each HLH gene enter the model?
+# An input node needs outgoing edges that reach the
+# measured TFs, so the perturbation can propagate.
+# A measurement node needs only incoming edges, so a sink can be used.
+g_pkn <- igraph::graph_from_data_frame(
+  pkn %>% dplyr::select(source, target), directed = TRUE)
+
+reach_to_tfs <- function(node) {
+  if (!node %in% igraph::V(g_pkn)$name) return(0L)
+  d <- igraph::distances(g_pkn, v = node,
+                         to = intersect(tf_all, igraph::V(g_pkn)$name),
+                         mode = "out")
+  as.integer(sum(is.finite(d)))
+}
+
+hlh_audit <- tibble::tibble(gene = hlh_chr) %>%
+  dplyr::mutate(
+    in_signalling = gene %in% c(sig$source, sig$target),
+    n_regulators = vapply(gene, function(g) sum(pkn$target == g), integer(1)),
+    n_outgoing = vapply(gene, function(g) sum(pkn$source == g), integer(1)),
+    tfs_reached = vapply(gene, reach_to_tfs, integer(1)),
+    role = dplyr::case_when(
+      n_outgoing > 0 & n_regulators > 0 ~ "both",
+      n_outgoing > 0 ~ "source only",
+      n_regulators > 0 ~ "sink (measurable only)",
+      TRUE ~ "absent"),
+    usable_as_input = ifelse(n_outgoing > 0 & tfs_reached > 0, "yes", "no")) %>%
+  dplyr::arrange(dplyr::desc(n_outgoing), dplyr::desc(n_regulators))
+
+hlh_audit
+
+
+# Evidence that the exclusions are structural, not artefacts
+# PRF1 has no usable outgoing edges anywhere in OmniPath, at any curation
+# level: two of its four are unsigned, two have zero references.
+all_int <- OmnipathR::import_all_interactions()
+
+all_int %>%
+  dplyr::filter(source_genesymbol == "PRF1") %>%
+  dplyr::select(target_genesymbol, is_directed, is_stimulation,
+                is_inhibition, curation_effort, n_references)
+
+# usable outgoing edges per HLH gene across ALL OmniPath layers
+all_int %>%
+  dplyr::filter(source_genesymbol %in% hlh_chr,
+                is_directed == 1,
+                is_stimulation + is_inhibition == 1) %>%
+  dplyr::count(source_genesymbol, name = "usable_outgoing") %>%
+  dplyr::right_join(tibble::tibble(source_genesymbol = hlh_chr),
+                    by = "source_genesymbol") %>%
+  dplyr::mutate(usable_outgoing = tidyr::replace_na(usable_outgoing, 0L)) %>%
+  dplyr::arrange(dplyr::desc(usable_outgoing))
+
+# Genes with no regulators in CollecTRI either cannot enter at all
+collectri %>% 
+  dplyr::filter(target %in% hlh_chr) %>% 
+  dplyr::count(target)
+
+setdiff(hlh_chr, collectri$target)
+
+# The two layers join: PRF1's regulators are embedded in the signalling layer
+pkn %>%
+  dplyr::filter(target == "PRF1") %>%
+  dplyr::mutate(regulator_in_signalling = source %in% c(sig$source, sig$target))
+
+# End-to-end reachability: cytokine receptor -> signalling -> TF -> PRF1
+receptors <- intersect(c("IL12RB1","IL12RB2","IFNGR1","IFNGR2","IL2RB","IL18R1"),
+                       igraph::V(g_pkn)$name)
+sapply(receptors, function(r) {
+  d <- igraph::distances(g_pkn, v = r, to = "PRF1", mode = "out")
+  ifelse(is.finite(d), as.numeric(d), NA_real_)
+})
+
+# the canonical JAK-STAT route, recovered
+igraph::V(g_pkn)$name[
+  igraph::shortest_paths(g_pkn, from = "IL12RB1", to = "PRF1",
+                         mode = "out")$vpath[[1]]]
+
+
+# cell-type-specific regulation of PRF1
+# Used ONLY to ask which edges differ between cell types, not to build
+# the networks that get solved. min_pct = 0.1 is a marker-gene threshold
+# (Seurat's FindMarkers default); with scRNA-seq dropout it is far too
+# strict to use as a presence filter, and pruning the solved PKN with it
+# removed two thirds of the measured TFs. The expression filter for the
+# PKN was already applied at the pseudobulk level (>=1 count in >=5
+# lymphoid samples).
+expressed_in <- function(ct, min_pct = 0.05) {
+  cells <- colnames(pbmc.clean)[pbmc.clean$celltype == ct]
+  cnt <- GetAssayData(pbmc.clean, assay = "RNA", layer = "counts")[, cells]
+  rownames(cnt)[Matrix::rowMeans(cnt > 0) >= min_pct]
+}
+
+genes_nk    <- expressed_in("NK")
+genes_temra <- expressed_in("CD8 TEMRA")
+
+prf1_regs <- pkn %>% dplyr::filter(target == "PRF1") %>%
+  dplyr::mutate(in_nk    = source %in% genes_nk,
+                in_temra = source %in% genes_temra)
+prf1_regs
+
+# regulators detected in NK but not CD8 TEMRA
+prf1_regs %>% dplyr::filter(in_nk, !in_temra) %>% dplyr::pull(source)
+
+
+# CARNIVAL inputs: one shared PKN, per-contrast measurements
+# Both cell types are solved over the identical coupled PKN, so any
+# difference between the solved networks reflects the measurements, not
+# the topology. The same holds for baseline vs counterfactual later.
+saveRDS(pkn, "pkn_carnival.rds")
+
+stat_list <- list(nk = stat_nk, temra = stat_temra)
+tf_list   <- list(nk = meas_nk, temra = meas_temra)
+tags      <- c("nk", "temra")
+
+for (tag in tags) {
+  
+  tf_v <- setNames(as.numeric(tf_list[[tag]][1, ]), colnames(tf_list[[tag]]))
+  tf_v <- tf_v[names(tf_v) %in% pkn_nodes]
+  
+  h <- stat_list[[tag]][intersect(hlh_chr, pkn_nodes)]
+  h <- h[!is.na(h)]
+  
+  # measObj magnitudes enter the ILP objective. If the HLH Wald statistics
+  # span a wider range than the TF activity scores, a few genes dominate
+  # the fit, so rescale them onto the TF range.
+  cat(sprintf("%-6s TF [%.1f, %.1f] n=%d | HLH raw [%.1f, %.1f] n=%d\n",
+              tag, min(tf_v), max(tf_v), length(tf_v),
+              min(h), max(h), length(h)))
+  
+  if (max(abs(h)) > max(abs(tf_v)))
+    h <- h * max(abs(tf_v)) / max(abs(h))
+  
+  meas <- as.data.frame(as.list(c(tf_v, h)))
+  saveRDS(meas, sprintf("meas_%s_baseline.rds", tag))
+  
+  cat(sprintf("%-6s %d TFs + %d HLH genes = %d measurements\n",
+              tag, length(tf_v), length(h), ncol(meas)))
+}
+
+# ---- validation ----
+for (tag in tags) {
+  p <- readRDS("pkn_carnival.rds")
+  m <- readRDS(sprintf("meas_%s_baseline.rds", tag))
+  stopifnot(identical(colnames(p), c("source", "interaction", "target")),
+            all(p$interaction %in% c(-1L, 1L)),
+            nrow(m) == 1L,
+            all(colnames(m) %in% c(p$source, p$target)))
+  cat(tag, "OK:", nrow(p), "edges,", ncol(m), "measurements\n")
+}

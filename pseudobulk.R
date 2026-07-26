@@ -772,9 +772,9 @@ ann_colors <- list(Module = c(
 
 table(ann_col$Module)   # how many fell through to "Other"
 
-# --- significance stars ---------------------------------------------
+# significance stars 
 # Recovers the FDR information dropped by ranking on effect size:
-# the reader sees magnitude (colour) and significance (star) together.
+# the reader can see both magnitude (colour) and significance (star) together.
 star_mat <- tf_acts %>%
   dplyr::filter(source %in% colnames(top_acts_mat)) %>%
   dplyr::mutate(lab = dplyr::case_when(
@@ -788,7 +788,7 @@ star_mat <- tf_acts %>%
 
 star_mat <- star_mat[rownames(top_acts_mat), colnames(top_acts_mat)]
 
-# --- heatmap ---------------------------------------------------------
+# heatmap 
 colors.use <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(100)
 lim <- quantile(abs(top_acts_mat), 0.95)
 my_breaks <- c(seq(-lim, 0, length.out = 51),
@@ -799,7 +799,8 @@ pheatmap(
   color = colors.use,
   breaks = my_breaks,
   border_color = "white",
-  cellwidth = 15, cellheight = 15,
+  cellwidth = 15, 
+  cellheight = 15,
   cluster_rows = FALSE,         
   gaps_row = 2,                  
   cutree_cols = 4,               
@@ -814,14 +815,43 @@ pheatmap(
   fontsize_col = 8,
   main = "TF activity: cytotoxic effectors vs naive T",
   filename = "28_tf_acts_lymphoid.pdf",
-  width  = ncol(top_acts_mat) * 15/72 + 5,
+  width = ncol(top_acts_mat) * 15/72 + 5,
   height = nrow(top_acts_mat) * 15/72 + 3.5)
+
+# combine the Wald Statistics for both contrasts into one single matrix
+g <- intersect(names(stat_temra), names(stat_nk))
+stat_mat <- cbind("CD8 TEMRA" = stat_temra[g], "NK" = stat_nk[g])
+
+tf_contrast <- run_ulm(
+  mat = stat_mat, 
+  network = collectri,
+  .source = "source", 
+  .target = "target", 
+  .mor = "mor",
+  minsize = 5) %>%
+  dplyr::filter(statistic == "ulm") %>%
+  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH"))
 
 # ============================================================
 # 12. Prepare CARNIVAL inputs
 # ============================================================
 
-Idents(pbmc) <- "celltype"
+# Extract TF activities
+make_measobj <- function(contrast, n_top = 50) {
+  tf_contrast %>%
+    dplyr::filter(condition == contrast, p_adj < 0.05) %>%
+    dplyr::slice_max(abs(score), n = n_top) %>%
+    dplyr::select(source, score) %>%
+    tidyr::pivot_wider(names_from = source, values_from = score) %>%
+    as.data.frame()
+}
+
+meas_temra <- make_measobj("CD8 TEMRA")
+meas_nk <- make_measobj("NK")
+
+# export as rds for carnival
+saveRDS(meas_temra, "meas_temra.rds")
+saveRDS(meas_nk, "meas_nk.rds")
 
 # Import prior knowledge network from OmniPath
 ppi <- omnipath_interactions() # 85,217 interactions
@@ -832,38 +862,45 @@ ppi <- omnipath_interactions() # 85,217 interactions
 # Curation_effort >= 2 was chosen.
 # >=3 loses key interactions involved in HLH gene regulation.
 # >=1 gives ~70k edges which is too big for solving a network.
-sig <- ppi %>%
-  dplyr::filter(consensus_direction == 1, # keep interactions with an agreed direction (source -> target)
-                consensus_stimulation + consensus_inhibition == 1, # keep only signed edges
-                curation_effort >= 2) %>% # keep only edges supported by >= 2 curation sources
-  dplyr::mutate(interaction = ifelse(consensus_stimulation == 1, 1, -1)) %>% # encode sign as CARNIVAL expects: +1 activation, -1 inhibition
-  dplyr::select(source = source_genesymbol, # regulator gene (edge start)
-                target = target_genesymbol, # target gene (edge end)
-                interaction) %>% # the signed edge weight
-  dplyr::distinct() # remove duplicate edges
+sig_all <- ppi %>%
+  dplyr::filter(consensus_direction == 1,
+                consensus_stimulation + consensus_inhibition == 1) %>%
+  dplyr::mutate(interaction = ifelse(consensus_stimulation == 1, 1L, -1L)) %>%
+  dplyr::select(source = source_genesymbol, interaction,
+                target = target_genesymbol, curation_effort) %>%
+  dplyr::filter(source != "", target != "", source != target) %>%
+  dplyr::group_by(source, interaction, target) %>%         
+  dplyr::summarise(curation_effort = max(curation_effort), .groups = "drop")
 
-# nrow(sig) returns 14,947 interactions survived
+# nrow(sig_all) returns 70,565 interactions
 
-# Can HLH genes be used as CARNIVAL inputs?
-# Which are in the signalling layer at all?
-hlh[hlh %in% c(sig$source, sig$target)]  # STX11, STXBP2, SH2D1A, XIAP
+expressed_ct <- rownames(mat_ct)                                        
+expressed_lax <- rownames(pseudo_sub)[rowSums(pseudo_sub >= 1) >= 5]     
+c(strict = length(expressed_ct), lax = length(expressed_lax))
 
-# Which are absent entirely?
-setdiff(hlh, c(sig$source, sig$target)) # PRF1, UNC13D, RAB27A, LYST
+# ---- grid: curation threshold x universe ----
+tf_all <- union(colnames(meas_temra), colnames(meas_nk))
 
-# Which have outgoing edges? A source node needs these for CARNIVAL to propagate a perturbation
-sig %>% 
-  dplyr::filter(source %in% hlh) %>% 
-  dplyr::count(source) 
+check <- function(ce, universe, label) {
+  s <- sig_all %>%
+    dplyr::filter(curation_effort >= ce,
+                  source %in% universe, target %in% universe)
+  nodes <- unique(c(s$source, s$target))
+  in_deg <- table(s$target)
+  reach <- intersect(tf_all, nodes)
+  data.frame(
+    universe = label,
+    curation = ce,
+    edges = nrow(s),
+    nodes = length(nodes),
+    tf_present = length(reach),
+    tf_with_in = sum(reach %in% names(in_deg)))   # TFs that can actually be explained
+}
 
-# STXBP2 has 1 outgoing edges and XIAP has 5
+grid <- do.call(rbind, c(
+  lapply(1:4, check, universe = expressed_ct,  label = "strict"),
+  lapply(1:4, check, universe = expressed_lax, label = "lax")))
+grid
 
-# Which are sinks? Sinks have regulators (incoming edges) but regulate nothing (no outgoing edges)
-intersect(hlh, setdiff(sig$target, sig$source)) # STX11 and SH2D1A
 
-# Of the two with outgoing edges, do they reach any of the measured TFs?
-# A source that reaches no target contributes nothing
-g_sig <- igraph::graph_from_data_frame(sig %>% 
-                                         dplyr::select(source, target),
-                                       directed = TRUE)
 

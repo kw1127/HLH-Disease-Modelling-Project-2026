@@ -701,246 +701,121 @@ write.csv(as.data.frame(res_nk), "de_nk.csv")
 # ============================================================
 # 11. TF activity (decoupleR + CollecTRI)
 # ============================================================
-
-# Get collecTRI regulon data
 collectri <- get_collectri(organism = "human", split_complexes = FALSE)
 
-# Cell-type contrast
-# No condition variable exists in this dataset (all healthy donors, single
-# timepoint), so TF activity is scored on each cell type's deviation from the
-# mean across all cell types. This gives a signed contrast: what is up or down
-# in NK relative to the PBMC compartment as a whole.
-#
-# Working from pseudobulk rather than per-cell also avoids the dropout noise
-# that makes single-cell regulon scoring unreliable — most regulon targets are
-# zero in any given cell, so per-cell scores are dominated by detection rate.
-ct_means <- sapply(split(seq_len(ncol(mat)), meta_pb$celltype), function(i) {
-  rowMeans(mat[, i, drop = FALSE])
-})
+# collapse pseudobulk samples to cell-type means
+ct <- droplevels(factor(meta_sub[colnames(mat_ct), "celltype"]))
+mat_ct_mean <- t(apply(mat_ct, 1, function(x) tapply(x, ct, mean)))
 
-# Center each gene across cell types.
-ct_contrast <- ct_means - rowMeans(ct_means)
+# gene-centering and scaling
+# Scores are relative to the mean of these four cell types, not to a
+# PBMC-wide average. Without centering, ULM tracks absolute expression
+# level (shared across all four) rather than difference between them.
+mat_z <- t(scale(t(mat_ct_mean)))
+mat_z <- mat_z[stats::complete.cases(mat_z), ]
 
-# TF activity calculation
-# For each cell type and TF, ULM fits a linear regression where the cell type's
-# centered expression values (response) are modelled against that TF's regulon,
-# each target carrying a mode-of-regulation weight (+1 activation, -1 repression).
-# The fitted t-value becomes the TF activity score.
-#
-# A high positive score means the TF's activating targets are elevated and its
-# repressed targets reduced in that cell type relative to the PBMC average,
-# implying the TF is active there.
-#
-# ULM is univariate: each TF is tested independently, which is fast and robust,
-# though it does not account for TFs sharing target genes.
 tf_acts <- run_ulm(
-  mat = ct_contrast, # centered pseudobulk matrix (genes x cell types)
-  net = collectri, # prior TF-target network (regulons)
-  .source = "source", # column naming the TF
-  .target = "target", # column naming each target gene
-  .mor = "mor", # mode of regulation / weight
-  minsize = 5) # keep TFs with at least 5 measured targets
+  mat = mat_z, network = collectri,
+  .source = "source", .target = "target", .mor = "mor",
+  minsize = 5) %>%
+  dplyr::filter(statistic == "ulm") %>%
+  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH"))
 
-# Compute BH-adjusted p-values on the ULM results
-tf_acts <- tf_acts %>%
-  dplyr::filter(statistic == 'ulm') %>% # keep ULM rows only
-  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) # FDR across all TF-cell tests
-
-# TF x celltype matrix
 tf_mat <- tf_acts %>%
   pivot_wider(id_cols = source, names_from = condition, values_from = score) %>%
   column_to_rownames("source") %>%
   as.matrix()
 
-# Select the most differentially active TFs across cell types.
-# Why SD? For each TF, mean = activity in each cell type. The SD of means
-# across cell types measures how much a TF's activity varies between cell types.
-# High SD = active in some types but not others.
-# Low SD = roughly constant everywhere. 
-# Ranking by SD shows the TFs that best separate cell types.
-sd_ranked <- data.frame(
-  source = rownames(tf_mat),
-  std = apply(tf_mat, 1, sd)) %>%
-  arrange(desc(std)) %>%
-  mutate(rank = row_number())
+# select TFs by effect size 
+# Not by FDR: with four conditions, the z-scoring compresses t-values,
+# so few tests clear BH and those that do are the largest regulons
+# (MYC, SP1, JUN) rather than the most informative TFs. 
+# Not by SD: n = 4, two of which (CD4/CD8 naive) are near-duplicates, so
+# SD cannot distinguish "high in one type" from "splits 2 vs 2".
+sig <- tf_acts %>%
+  group_by(source) %>%
+  summarise(max_abs   = max(abs(score)),
+            best_padj = min(p_adj), .groups = "drop") %>%
+  arrange(desc(max_abs))
 
-top_sd <- ggplot(sd_ranked, aes(rank, std)) +
-  geom_line() +
-  geom_point(size = 0.6) +
-  geom_vline(xintercept = 50, linetype = "dashed", colour = "red") +
-  labs(x = "TF rank by between-cell-type SD",
-       y = "SD of mean activity across cell types",
-       title = "Selection of differentially active TFs by standard deviation (SD)") +
-  theme_minimal()
-
-ggsave("23_tf_sd_elbow.png", top_sd, width = 7, height = 5, dpi = 300)
-
-# SD of mean activity plateaus around 50, thus select the top 50 TFs for downstream analysis.
-
-# Heatmap of differentially active TFs
-top_tfs <- sd_ranked %>%
-  slice_head(n = 50) %>%
-  pull(source)
+top_tfs <- head(sig$source, 40)
 
 top_acts_mat <- t(tf_mat[top_tfs, ])
+row_order <- c("CD4 naive T", "CD8 naive T", "CD8 TEMRA", "NK")
+top_acts_mat <- top_acts_mat[intersect(row_order, rownames(top_acts_mat)), ]
 
-colors <- rev(brewer.pal(11, "RdBu"))
-colors.use <- colorRampPalette(colors)(100)
+# module annotation
+# Assigned from prior biology
+modules <- list(
+  "Effector / IFN" = c("TBX21", "STAT1", "IRF1", "IRF3", "IRF5",
+                           "NFKB", "RUNX1", "RUNX2", "PML"),
+  "MHC class II" = c("CIITA", "RFX5", "RFXANK", "RFXAP"),
+  "Growth / metabolic" = c("MYC", "MZF1", "SP1", "NFYA", "NFYB",
+                           "SREBF1", "SREBF2", "NR1H3", "ATF6"),
+  "Stress / AP-1" = c("JUN", "AP1", "ATF2", "DDIT3", "NFE2L2",
+                           "TP53", "BACH1", "LITAF"))
 
+module <- setNames(rep("Other", ncol(top_acts_mat)), colnames(top_acts_mat))
+for (m in names(modules))
+  module[names(module) %in% modules[[m]]] <- m
+
+ann_col <- data.frame(Module = factor(
+  module, levels = c(names(modules), "Other")),
+  row.names = names(module))
+
+ann_colors <- list(Module = c(
+  "Effector / IFN" = "#C0504D",
+  "MHC class II" = "#9970AB",
+  "Growth / metabolic" = "#4F81BD",
+  "Stress / AP-1" = "#E8A33D",
+  "Other" = "grey85"))
+
+table(ann_col$Module)   # how many fell through to "Other"
+
+# --- significance stars ---------------------------------------------
+# Recovers the FDR information dropped by ranking on effect size:
+# the reader sees magnitude (colour) and significance (star) together.
+star_mat <- tf_acts %>%
+  dplyr::filter(source %in% colnames(top_acts_mat)) %>%
+  dplyr::mutate(lab = dplyr::case_when(
+    p_adj < 0.001 ~ "***",
+    p_adj < 0.01  ~ "**",
+    p_adj < 0.05  ~ "*",
+    TRUE ~ "")) %>%
+  pivot_wider(id_cols = condition, names_from = source, values_from = lab) %>%
+  column_to_rownames("condition") %>%
+  as.matrix()
+
+star_mat <- star_mat[rownames(top_acts_mat), colnames(top_acts_mat)]
+
+# --- heatmap ---------------------------------------------------------
+colors.use <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(100)
 lim <- quantile(abs(top_acts_mat), 0.95)
 my_breaks <- c(seq(-lim, 0, length.out = 51),
                seq(lim / 50, lim, length.out = 50))
+
 pheatmap(
   mat = top_acts_mat,
   color = colors.use,
-  border_color = "white",
   breaks = my_breaks,
-  cellwidth = 15,
-  cellheight = 15,
-  treeheight_row = 20,
-  treeheight_col = 20,
-  main = "Differential transcription factor activity across cell types",
+  border_color = "white",
+  cellwidth = 15, cellheight = 15,
+  cluster_rows = FALSE,         
+  gaps_row = 2,                  
+  cutree_cols = 4,               
+  treeheight_col = 25,
   angle_col = 90,
-  fontsize = 10,
+  annotation_col = ann_col,
+  annotation_colors = ann_colors,
+  display_numbers = star_mat,
+  number_color = "black",
+  fontsize_number = 7,
   fontsize_row = 11,
   fontsize_col = 8,
-  legend = TRUE,
-  filename = "tf_heatmap_pseudo.pdf",
-  width = 16, height = 5)
-
-# Check against known lineage TFs 
-# If these do not land where expected, the contrast construction is wrong
-lineage_tfs <- c("TBX21", "EOMES", "RUNX3", "STAT4", # cytotoxic (NK, CD8 eff)
-                 "PAX5", "POU2AF1", "EBF1", # B
-                 "SPI1", "CEBPB", "CEBPA", # myeloid
-                 "TCF7", "LEF1", "FOXP1", # naive T
-                 "IRF7", "IRF8") # pDC
-
-round(tf_mat[intersect(lineage_tfs, rownames(tf_mat)), ], 2)
-
-# Top TFs per cell type
-tf_acts %>%
-  group_by(condition) %>%
-  slice_max(abs(score), n = 10) %>%
-  arrange(condition, desc(abs(score))) %>%
-  print(n = Inf)
-
-# How are primary HLH-associated genes expressed across cell types?
-# Canonical fHL-associated genes and other primary HLH-associated genes
-hlh <- c(
-  "PRF1",   
-  "UNC13D",  
-  "STX11",  
-  "STXBP2", 
-  "RAB27A", 
-  "LYST",    
-  "SH2D1A",  
-  "XIAP"
-)
-
-hlh <- factor(hlh, levels = hlh)
-
-DefaultAssay(pbmc) <- "RNA"
-
-dot_hlh <- DotPlot(pbmc, features = hlh) +
-  RotatedAxis() +
-  labs(title = "Expression of primary HLH-associated genes across cell types",
-       x = "HLH-associated gene", y = "Cell type") +
-  theme(plot.title  = element_text(size = 12, face = "bold", hjust = 0.5),
-        axis.text.x = element_text(size = 10),
-        axis.text.y = element_text(size = 10),
-        legend.title = element_text(size = 9)) +
-  geom_vline(xintercept = c(4.5, 6.5), linetype = "dashed", colour = "grey70")
-
-ggsave("hlh_expression__psuedo_dotplot.png", dot_hlh, width = 8, height = 5)
-
-# Same at pseudobulk level, for consistency with the TF scores.
-pheatmap(t(ct_means[intersect(hlh, rownames(ct_means)), ]),
-         scale = "column",
-         cellwidth = 20,
-         cellheight = 15,
-         color = colors.use,
-         border_color = "white",
-         angle_col = 45,
-         fontsize_col = 9,
-         main = "HLH gene expression (pseudobulk, scaled per gene)",
-         filename = "hlh_expression_pseudo.png",
-         width = 8, height = 5)
-
-# Plot activity of top 5 TFs by cell type
-# First, select significant, most-characteristic TFs per cell type ----
-top5_tfs <- tf_acts %>%
-  dplyr::filter(p_adj < 0.05) %>%
-  group_by(condition) %>%
-  slice_max(abs(score), n = 5, with_ties = FALSE) %>%
-  ungroup() %>%
-  pull(source) %>%
-  unique()
-
-top5_tfs <- intersect(top5_tfs, rownames(tf_mat))
-
-# Fixed lineage ordering for rows for better readability
-ct_order <- c("CD4 T naive", "CD4 T memory", "CD8 T naive", "CD8 T memory",
-              "CD8 T effector", "NK", "B naive", "B memory",
-              "pDC", "cDC2", "CD14 Mono", "CD14 Mono IFN", "CD16 Mono")
-ct_order <- intersect(ct_order, colnames(tf_mat)) # guard against name mismatch
-
-top5_mat <- t(tf_mat[top5_tfs, ct_order, drop = FALSE])
-
-# Colour scale with less saturation 
-limit <- quantile(abs(top5_mat), 0.99)
-breaks <- c(seq(-lim, 0, length.out = 51),
-               seq(lim / 50, lim, length.out = 50))
-
-# Column annotation by functional module
-module_map <- c(
-  RFX5 = "MHC-II", RFXAP = "MHC-II", RFXANK = "MHC-II", CIITA = "MHC-II", RFX1 = "MHC-II",
-  SPI1 = "Myeloid", CEBPA = "Myeloid", CEBPG = "Myeloid", CEBPB = "Myeloid",
-  JUN = "Myeloid", JUND = "Myeloid", NFE2L2 = "Myeloid", SP1 = "Myeloid", PPARD = "Myeloid",
-  EOMES = "Cytotoxic", STAT4 = "Cytotoxic", ZGLP1 = "Cytotoxic",
-  TBX21 = "Cytotoxic", RUNX3 = "Cytotoxic",
-  EBF1 = "B lineage", PAX5 = "B lineage", POU2AF1 = "B lineage",
-  TRERF1 = "T lineage", RORC = "T lineage", NFKB2 = "T lineage",
-  FOXP1 = "T lineage", SATB1 = "T lineage", IKZF1 = "T lineage",
-  TCF7 = "T lineage", LEF1 = "T lineage", ETS1 = "T lineage",
-  STAT1 = "Interferon", IRF1 = "Interferon", IRF5 = "Interferon",
-  IRF7 = "Interferon", IRF8 = "Interferon", RELA = "NF-kB"
-)
-
-tf_annot <- data.frame(
-  Module = unname(module_map[colnames(top5_mat)]),
-  row.names = colnames(top5_mat)
-)
-
-module_cols <- list(Module = c(
-  "MHC-II" = "#4C72B0",
-  "Myeloid" = "#DD8452",
-  "Cytotoxic" = "#C44E52",
-  "B lineage" = "#55A868",
-  "T lineage" = "#8172B3",
-  "Interferon" = "#937860",
-  "NF-kB" = "#8C8C8C"
-))
-
-pheatmap(
-  mat = top5_mat,
-  color = colors.use,
-  breaks = my_breaks,
-  border_color = "white",
-  cluster_rows = FALSE,         
-  cluster_cols = TRUE,          
-  annotation_col = tf_annot,
-  annotation_colors = module_cols,
-  cellwidth = 20,
-  cellheight = 20,
-  treeheight_col = 20,
-  main = "Cell-type-specific transcription factor activity (FDR < 0.05)",
-  angle_col = 90,
-  fontsize_col = 9,
-  fontsize_row   = 10,
-  filename = "24_tf_top5_heatmap.png",
-  width = 9, height = 5
-)
+  main = "TF activity: cytotoxic effectors vs naive T",
+  filename = "28_tf_acts_lymphoid.pdf",
+  width  = ncol(top_acts_mat) * 15/72 + 5,
+  height = nrow(top_acts_mat) * 15/72 + 3.5)
 
 # ============================================================
 # 12. Prepare CARNIVAL inputs

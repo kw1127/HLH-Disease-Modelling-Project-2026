@@ -35,6 +35,7 @@
   library(mclust)
   library(patchwork)
   library(ggrepel)
+  library(patchwork)
   
   # Fixes the random number generator so that anything stochastic (UMAP,
   # clustering, downsampling) gives the same answer every time the script runs.
@@ -54,7 +55,8 @@
   # Convert to a seurat object
   pbmc <- CreateSeuratObject(
     counts = counts(kotliarov), # pulls the raw count matrix
-    meta.data = as.data.frame(colData(kotliarov))) # pulls the per-cell metadata
+    meta.data = as.data.frame(colData(kotliarov)), # pulls the per-cell metadata
+    project = "pbmc")
   
   # Inspect metadata columns to find donor and batch columns needed for pseudobulking later
   colnames(pbmc@meta.data)
@@ -74,11 +76,12 @@
   
   # Distributions of the three standard QC metrics.
   #   nFeature_RNA = how many distinct genes were detected in that cell
-  #   nCount_RNA   = how many transcripts (UMIs) total in that cell
-  #   percent.mt   = the mitochondrial fraction computed above
+  #   nCount_RNA = how many transcripts (UMIs) total in that cell
+  #   percent.mt = the mitochondrial fraction computed above
   # Interpretation: very low nFeature = empty or failed droplet; very high
   # nCount = possible two cells in one droplet (doublet); high percent.mt = dying.
-  p_qc_vln <- VlnPlot(pbmc, c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.05)
+  p_qc_vln <- VlnPlot(pbmc, c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+                      ncol = 3, pt.size = 0.05)
   ggsave("01_qc_violin.png", p_qc_vln, width = 10, height = 4, dpi = 300)
   
   # Plot the relationships between different QC metrics.
@@ -88,6 +91,19 @@
   # plot2: nCount_RNA (x) vs nFeature_RNA (y): counts vs genes detected per cell.
   p2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
   ggsave("02_qc_scatter.png", p1 + p2, width = 10, height = 4, dpi = 300)
+  
+  fig1 <- wrap_elements(p_qc_vln) / (p1 + p2) +
+    plot_annotation(
+      title = "Figure 1: Quality control of healthy PBMC scRNA-seq data",
+      tag_levels = "A"
+    )
+  
+  ggsave("Figure_01_qc.png", fig1, width = 10, height = 8, dpi = 300)
+  
+  metadata <- pbmc@meta.data
+  
+  round(sapply(metadata[, c("nFeature_RNA", "nCount_RNA", "percent.mt")],
+               quantile, probs = c(0.25, 0.5, 0.75)), 1)
   
   # subset pbmcs based on the violin plots
   pbmc <- subset(pbmc, 
@@ -147,21 +163,32 @@
   # Caveat: it's linear (misses nonlinear structure) and variance-driven, so uncorrected
   # technical variance (batch, depth) can dominate a PC.
   pbmc <- RunPCA(pbmc, npcs = 50, seed.use = 42)
+  p3 <- DimPlot(pbmc, reduction = "pca") + 
+    NoLegend() 
+  
   ggsave("03_pca.png", DimPlot(pbmc, reduction = "pca") + NoLegend(), width = 6, height = 5, dpi = 300)
   
   # Plots the variance captured by each PC in descending order.
   # Used to decide the optimal number of PCs for downstream steps.
   # Find the elbow: the point where the curve flattens and difference in variance captured plateaus.
   # Keep the PCs before the elbow (often ~10-20).
+  p4 <- ElbowPlot(pbmc, ndims = 50)
   ggsave("04_elbow.png", ElbowPlot(pbmc, ndims = 50), width = 6, height = 4, dpi = 300)
   
+  fig1 <- wrap_elements(p_qc_vln) / (p1 + p2) / (p3 + p4) +
+    plot_annotation(
+      title = "Figure 1: QC healthy PBMC scRNA-seq data",
+      tag_levels = "A"
+    )
+  
+  ggsave("Figure_01_qc.png", fig1, width = 10, height = 12, dpi = 300)
   # ============================================================
   # 5. Clustering
   # ============================================================
   
   # Build a shared nearest-neighbor (SNN) graph from the first 15 PCs.
-  # For each cell, find its k nearest neighbors in PC space, then weight the edges beteen two cells by how many
-  # neighbors they share. 
+  # For each cell, find its k nearest neighbors in PC space, then weight the edges between two cells by how many
+  # neighbors they share.
   # dims = 1:x should match the number of PCs chosen from ElbowPlot.
   pbmc <- FindNeighbors(pbmc, dims = 1:15)
   res_seq <- seq(0.3, 1.0, by = 0.1)
@@ -210,13 +237,38 @@
                  label = TRUE, ncol = 4) & NoLegend(),
          width = 16, height = 8, dpi = 300)
   
+  leiden_res <- DimPlot(pbmc, group.by = paste0("leiden_res.", res_seq),
+                        label = TRUE, label.size = 3, ncol = 4) &
+    NoLegend() & 
+    NoAxes() &
+    theme(plot.title = element_text(size = 10))
+  
   ggsave("05b_louvain_resolutions.png",
          DimPlot(pbmc, group.by = paste0("louvain_res.", res_seq),
                  label = TRUE, ncol = 4) & NoLegend(),
          width = 16, height = 8, dpi = 300)
   
+  louvain_res <- DimPlot(pbmc, group.by = paste0("louvain_res.", res_seq),
+                         label = TRUE, label.size = 3, ncol = 4) &
+    NoLegend() & 
+    NoAxes() &
+    theme(plot.title = element_text(size = 10))
+  
+  sup1 <- wrap_elements(leiden_res) / wrap_elements(louvain_res) +
+    plot_annotation(
+      title = "Supplementary figure 2: Leiden vs Louvain clustering across resolutions",
+      tag_levels = "A"
+    )
+  
+  ggsave("supp_fig_01_dimred.png", sup1, width = 14, height = 14, dpi = 300)
+  
   # Find how cell clusters separate with each resolution
   ggsave("06_clustree.png", clustree(pbmc, prefix = "leiden_res."), width = 10, height = 10, dpi = 300)
+  
+  clustree <- clustree(pbmc, prefix = "leiden_res.", show_axis = TRUE) +
+    guides(colour = "none", edge_alpha = "none", size = "none") +
+    scale_x_continuous(expand = expansion(mult = 0.12)) +
+    labs(y = "Resolution")
   
   Idents(pbmc) <- "leiden_res.0.7"
   ggsave("07_umap_res07.png",
@@ -224,6 +276,23 @@
            NoLegend() +
            ggtitle("Leiden, resolution 0.7"),
          width = 7, height = 6, dpi = 300)
+  
+  leiden_res07 <- DimPlot(pbmc, reduction = "umap", group.by = "leiden_res.0.7",
+                          label = TRUE, repel = TRUE) +
+    guides(colour = "none") +
+    coord_fixed() +
+    NoAxes() +
+    ggtitle("Leiden, resolution 0.7")
+  
+  fig2 <- clustree + leiden_res07 +
+    plot_layout(widths = c(2, 1), guides = "collect") +
+    plot_annotation(
+      title = "Figure 2: Resolution selection for Leiden clustering",
+      tag_levels = "A"
+    ) &
+    theme(legend.position = "bottom", legend.key.width = unit(1.5, "cm"))
+  
+  ggsave("Figure_02_clustering.png", fig2, width = 13, height = 6.5, dpi = 300)
   
   # ============================================================
   # 6. Reference-based annotation
@@ -536,6 +605,42 @@
   
   saveRDS(pbmc.clean, "pbmc_annotated.rds")
   
+  evidence <- tibble::tribble(
+    ~cluster, ~protein, ~rna, ~label,
+    "1", "CD3+ CD4+ CD62L-hi CD197-hi CD45RA+ CD127+", "CCR7, SELL, TCF7, LDHB, PIK3IP1, NOSIP", "CD4 naive T",
+    "2", "CD3+ CD4+ CD45RO-hi CD45RA-lo CD25-hi CD127+", "IL7R, LTB, IL32, CD69, ITGB1; CCR7/SELL absent", "CD4 memory T",
+    "3", "CD14-hi CD16-neg HLA-DR+ CD11c+", "CD14, LYZ, S100A8/9/12, VCAN, LGALS2, MS4A6A", "Classical monocytes",
+    "4", "CD3+ CD8+ CD57-hi CD62L-neg CD45RO+", "GZMH, GNLY, FGFBP2, NKG7, CST7, GZMA/GZMM", "CD8 TEMRA",
+    "5", "CD3+ CD8+ CD161-hi CD45RO-hi CD127+ CD279+", "GZMK, KLRB1, DUSP2, IL7R, CCL5", "MAIT / CD8 EM",
+    "6", "CD3-neg CD56-hi CD16-hi", "KLRF1, KLRD1, SPON2, CLIC3, PRF1, GZMB, GNLY", "NK",
+    "7", "CD19+ CD20-hi IgD-hi IgM-hi CD27-neg", "TCL1A, MS4A1, CD79A/B, HLA-DQ/DR", "Naive B",
+    "8", "CD3+ CD8-hi CD62L+ CD197-hi CD45RA+", "CD8B, CCR7, TCF7, SELL, NOSIP, PIK3IP1, LDHB", "CD8 naive T",
+    "9", "No lineage-defining protein", "MT-* genes and MALAT1 only; several with pct.2 > pct.1", "Low quality",
+    "10", "CD19+ CD20-hi CD27+ IgM+ IgD-lo CD11c+", "BANK1, MS4A1, CD79A/B, IGJ; TCL1A absent", "Memory B",
+    "11", "CD16-hi CD14-lo CD11c-hi", "FCGR3A, MS4A7, CDKN1C, CSF1R, LST1, LILRB2, TCF7L2", "Non-classical monocytes",
+    "12", "CD1c-hi CD11c+ HLA-DR-hi CD14-neg", "FCER1A, CLEC10A, CD1C, CPVL, HLA-DPA1/DQA1", "cDC2",
+    "13", "CD14-hi CD16-neg CD11c+", "S100A8, FCGR1A, FOLR3, GBP1, WARS, TNFSF10, TYMP", "Activated classical monocytes",
+    "14", "CD303-hi CD123-hi CD11c-neg HLA-DR+", "LILRA4, CLEC4C, SCT, SERPINF1, DNASE1L3, LRRC26", "pDC",
+    "15", "CD3+ CD4+ CD8+ CD19+ CD16+ (mutually exclusive)", "MKI67, TYMS, RRM2, TK1, PCNA, STMN1", "Doublets",
+    "16", "All lineage proteins flat", "SDPR/CAVIN2, PPBP, PF4, HIST1H2AC, TSC22D1", "Platelets")
+  
+  # add cell counts and SingleR majority call, so the table carries data not just prose
+  evidence <- evidence %>%
+    dplyr::mutate(
+      n_cells = as.integer(table(pbmc$leiden_res.0.7)[cluster]),
+      singler = colnames(singler_by_cluster)[max.col(singler_by_cluster)][
+        match(cluster, rownames(singler_by_cluster))])
+  
+  evidence %>%
+    dplyr::select(Cluster = cluster, `n cells` = n_cells,
+                  `SingleR (majority)` = singler,
+                  `Surface protein` = protein, `RNA markers` = rna,
+                  `Assigned label` = label) %>%
+    gt::gt() %>%
+    gt::tab_header(title = "Evidence supporting cell type assignment") %>%
+    gt::tab_source_note("Clusters from Leiden clustering at resolution 0.7") %>%
+    gt::gtsave("supp_table_annotation.png")   
+  
   # ============================================================
   # 10. Pseudobulk
   #
@@ -740,7 +845,10 @@ png("25_sample_distance_lymphoid.png", width = 9, height = 8, units = "in", res 
 pheatmap(as.matrix(sampleDists),
          clustering_distance_rows = sampleDists,
          clustering_distance_cols = sampleDists,
-         annotation_col = ann, show_rownames = FALSE, show_colnames = FALSE,
+         clustering_method = "ward.D2",
+         annotation_col = ann, 
+         show_rownames = FALSE, 
+         show_colnames = FALSE,
          color = colorRampPalette(rev(brewer.pal(9, "Blues")))(255),
          main = "Sample distances (VST)")
 dev.off()
@@ -781,7 +889,10 @@ con[coef_of("CD4 naive T")] <- -0.5
 # CD8 naive T is the reference, its coefficient is 0 by construction
 
 # unname() because results() expects a plain numeric vector in coefficient order.
-res_nk <- results(dds_ct, contrast = unname(con), alpha = 0.05)
+res_nk <- results(
+  dds_ct, 
+  contrast = unname(con), 
+  alpha = 0.05)
 
 # Volcano plots for the two contrasts
 hlh_chr <- as.character(hlh)
@@ -791,52 +902,84 @@ hlh_chr <- as.character(hlh)
 # markers (CCR7, SELL, TCF7) on the other.
 anchors <- c("GNLY", "NKG7", "GZMB", "CCL5", "CD3D", "CCR7", "SELL", "TCF7")
 
-volcano <- function(res, title, file, cap = 150) {
-  
-  df <- as.data.frame(res) |>
-    rownames_to_column("gene") |>
-    filter(!is.na(padj)) |> # DESeq2 sets padj to NA for filtered genes
-    mutate(
-      y = pmin(-log10(padj), cap), # Caps the axis to prevent small p-values dominating
-      sig = case_when(padj < 0.05 & log2FoldChange > 1 ~ "Up in effector",
-                      padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
-                      TRUE ~ "n.s."))
-  
-  ggplot(df, aes(log2FoldChange, y)) +
-    geom_point(aes(colour = sig), size = 0.7, alpha = 0.4) +
-    scale_colour_manual(values = c("Up in effector" = "#C0504D",
-                                   "Up in naive" = "#4F81BD",
-                                   "n.s." = "grey80"), name = NULL) +
-    geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
-    geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
-    
-    # anchor markers, for orientation
-    geom_text_repel(data = filter(df, gene %in% anchors),
-                    aes(label = gene), size = 3, colour = "grey25",
-                    fontface = "italic", max.overlaps = Inf, seed = 42,
-                    ylim = c(NA, cap * 0.9), nudge_y = -8,
-                    box.padding = 0.5,
-                    segment.colour = "grey60", segment.size = 0.3) +
-    
-    # HLH genes, the subject
-    geom_point(data = filter(df, gene %in% hlh_chr),
-               colour = "#1B7837", size = 2.5, shape = 18) +
-    geom_text_repel(data = filter(df, gene %in% hlh_chr),
-                    aes(label = gene), size = 3.5, colour = "#1B7837",
-                    fontface = "bold", max.overlaps = Inf, seed = 42,
-                    ylim = c(NA, cap * 0.9), nudge_y = -8,
-                    box.padding = 0.5,
-                    segment.colour = "#1B7837", segment.size = 0.3) +
-    
-    labs(x = "log2 fold change", y = "-log10 (padj)", title = title,
-         caption = sprintf("y-axis capped at %g", cap)) +
-    theme_bw()
-  
-  ggsave(file, width = 9, height = 7, dpi = 300)
-}
+cap <- 150 # # y-axis ceiling; prevents small p-values from dominating the plot
 
-volcano(res_temra, "CD8 TEMRA vs CD8 naive T", "26_volcano_temra.png")
-volcano(res_nk, "NK vs pooled naive (CD4 + CD8 naive T)", "27_volcano_nk.png")
+# Volcano 1: CD8 TEMRA vs CD8 naive T
+df_temra <- as.data.frame(res_temra) %>%
+  rownames_to_column("gene") %>%
+  filter(!is.na(padj)) %<% # DESeq2 sets padj to NA for filtered genes
+  mutate(
+    y = pmin(-log10(padj), cap),
+    sig = case_when(padj < 0.05 & log2FoldChange > 1 ~ "Up in effector",
+                    padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
+                    TRUE ~ "n.s."))
+
+p_temra <- ggplot(df_temra, aes(log2FoldChange, y)) +
+  geom_point(aes(colour = sig), size = 0.7, alpha = 0.4) +
+  scale_colour_manual(values = c("Up in effector" = "#C0504D",
+                                 "Up in naive" = "#4F81BD",
+                                 "n.s." = "grey80"), name = NULL) +
+  geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
+  geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
+  geom_text_repel(data = filter(df_temra, gene %in% anchors), # anchor markers, for orientation
+                  aes(label = gene), size = 3, colour = "grey25",
+                  fontface = "italic", max.overlaps = Inf, seed = 42,
+                  ylim = c(NA, cap * 0.9), nudge_y = -8,
+                  box.padding = 0.5,
+                  segment.colour = "grey60", segment.size = 0.3) +
+  geom_point(data = filter(df_temra, gene %in% hlh_chr), # HLH genes, the subject
+             colour = "#1B7837", size = 2.5, shape = 18) +
+  geom_text_repel(data = filter(df_temra, gene %in% hlh_chr),
+                  aes(label = gene), size = 3.5, colour = "#1B7837",
+                  fontface = "bold", max.overlaps = Inf, seed = 42,
+                  ylim = c(NA, cap * 0.9), nudge_y = -8,
+                  box.padding = 0.5,
+                  segment.colour = "#1B7837", segment.size = 0.3) +
+  labs(x = "log2 fold change", y = "-log10 (padj)",
+       title = "CD8 TEMRA vs CD8 naive T",
+       caption = sprintf("y-axis capped at %g", cap)) +
+  theme_bw()
+
+ggsave("26_volcano_temra.png", p_temra, width = 9, height = 7, dpi = 300)
+
+# Volcano 2: NK vs pooled naive
+df_nk <- as.data.frame(res_nk) |>
+  rownames_to_column("gene") |>
+  filter(!is.na(padj)) |>
+  mutate(
+    y = pmin(-log10(padj), cap),
+    sig = case_when(padj < 0.05 & log2FoldChange >  1 ~ "Up in effector",
+                    padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
+                    TRUE ~ "n.s."))
+
+p_nk <- ggplot(df_nk, aes(log2FoldChange, y)) +
+  geom_point(aes(colour = sig), size = 0.7, alpha = 0.4) +
+  scale_colour_manual(values = c("Up in effector" = "#C0504D",
+                                 "Up in naive"    = "#4F81BD",
+                                 "n.s."           = "grey80"), name = NULL) +
+  geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
+  geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
+  geom_text_repel(data = filter(df_nk, gene %in% anchors),
+                  aes(label = gene), size = 3, colour = "grey25",
+                  fontface = "italic", max.overlaps = Inf, seed = 42,
+                  ylim = c(NA, cap * 0.9), nudge_y = -8,
+                  box.padding = 0.5,
+                  segment.colour = "grey60", segment.size = 0.3) +
+  geom_point(data = filter(df_nk, gene %in% hlh_chr),
+             colour = "#1B7837", size = 2.5, shape = 18) +
+  geom_text_repel(data = filter(df_nk, gene %in% hlh_chr),
+                  aes(label = gene), size = 3.5, colour = "#1B7837",
+                  fontface = "bold", max.overlaps = Inf, seed = 42,
+                  ylim = c(NA, cap * 0.9), nudge_y = -8,
+                  box.padding = 0.5,
+                  segment.colour = "#1B7837", segment.size = 0.3) +
+  
+  labs(x = "log2 fold change", y = "-log10 (padj)",
+       title = "NK vs pooled naive (CD4 + CD8 naive T)",
+       caption = sprintf("y-axis capped at %g", cap)) +
+  theme_bw()
+
+ggsave("27_volcano_nk.png", p_nk, width = 9, height = 7, dpi = 300)
 
 # Extract the Wald statistics
 # stat = log2FoldChange / standard error. It combines effect size and precision
@@ -879,11 +1022,10 @@ mat_ct_mean <- t(apply(mat_ct, 1, function(x) tapply(x, ct, mean)))
 # Why this is necessary: the linear model below regresses expression on regulon
 # membership. On raw VST values the fit is driven by absolute expression level,
 # which is shared by all four cell types, so every TF would score high. After
-# centring, each value says "how far above or below this gene's own average",
-# which is the difference the analysis is about.
+# centering, each value says "how far above or below this gene's own average". 
 #
-# What this means for interpretation: scores are relative to the mean of THESE
-# FOUR cell types, not to a PBMC-wide average. A TF uniformly high in all
+# What this means for interpretation: scores are relative to the mean of the four
+# cell types, not to a global average. A TF uniformly high in all
 # lymphocytes but absent in monocytes now looks flat, not high.
 mat_z <- t(scale(t(mat_ct_mean)))
 mat_z <- mat_z[stats::complete.cases(mat_z), ]
@@ -934,7 +1076,7 @@ tf_ranked <- tf_acts %>%
             best_padj = min(p_adj), .groups = "drop") %>%
   arrange(desc(max_abs))
 
-top_tfs <- head(sig$source, 40)
+top_tfs <- head(tf_ranked$source, 40)
 
 # Transpose so cell types are rows and TFs are columns.
 top_acts_mat <- t(tf_mat[top_tfs, ])
@@ -1006,7 +1148,7 @@ pheatmap(
   cellheight = 15,
   cluster_rows = FALSE,         
   gaps_row = 2,                  
-  cutree_cols = 4,               
+  cutree_cols = 3,             
   treeheight_col = 25,
   angle_col = 90,
   annotation_col = ann_col,
@@ -1046,7 +1188,7 @@ tf_contrast <- run_ulm(
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH"))
 
 # ============================================================
-# 12. Prior knowledge network and CARNIVAL inputs
+# 13. Prior knowledge network and CARNIVAL inputs
 #
 #     Signalling layer -> couple TF->HLH edges -> prune per cell type
 #     The CollecTRI edges must be present before pruning so the
@@ -1090,6 +1232,7 @@ sig_all <- ppi %>%
                 source != target) %>% # self-loops: one state per node, so vacuous or contradictory
   dplyr::group_by(source, interaction, target) %>%
   dplyr::summarise(curation_effort = max(curation_effort), .groups = "drop")
+
 # nrow(sig_all) = 70,565 unique signed directed edges
 
 
@@ -1137,7 +1280,7 @@ sig <- sig_all %>%
 nrow(sig)
 
 
-# 12.4 Couple the transcriptional layer
+# Couple the transcriptional layer
 # The HLH genes are terminal effectors. They have regulators but no downstream
 # signalling. Adding TF -> HLH edges from CollecTRI lets them enter the
 # model as measurable endpoints rather than as perturbation nodes.
@@ -1163,7 +1306,7 @@ dim(meas_temra); dim(meas_nk)
 saveRDS(pkn, "pkn_full.rds")
 
 
-# 12.5 Audit: how can each HLH gene enter the model?
+# Audit: how can each HLH gene enter the model?
 # An input node needs outgoing edges that reach the
 # measured TFs, so the perturbation can propagate.
 # A measurement node needs only incoming edges, so a sink can be used.
@@ -1256,17 +1399,18 @@ expressed_in <- function(ct, min_pct = 0.05) {
   rownames(cnt)[Matrix::rowMeans(cnt > 0) >= min_pct]
 }
 
-genes_nk    <- expressed_in("NK")
+genes_nk <- expressed_in("NK")
 genes_temra <- expressed_in("CD8 TEMRA")
 
 prf1_regs <- pkn %>% dplyr::filter(target == "PRF1") %>%
-  dplyr::mutate(in_nk    = source %in% genes_nk,
+  dplyr::mutate(in_nk = source %in% genes_nk,
                 in_temra = source %in% genes_temra)
 prf1_regs
 
 # regulators detected in NK but not CD8 TEMRA
-prf1_regs %>% dplyr::filter(in_nk, !in_temra) %>% dplyr::pull(source)
-
+prf1_regs %>% 
+  dplyr::filter(in_nk, !in_temra) %>% 
+  dplyr::pull(source)
 
 # CARNIVAL inputs: one shared PKN, per-contrast measurements
 # Both cell types are solved over the identical coupled PKN, so any
@@ -1275,8 +1419,8 @@ prf1_regs %>% dplyr::filter(in_nk, !in_temra) %>% dplyr::pull(source)
 saveRDS(pkn, "pkn_carnival.rds")
 
 stat_list <- list(nk = stat_nk, temra = stat_temra)
-tf_list   <- list(nk = meas_nk, temra = meas_temra)
-tags      <- c("nk", "temra")
+tf_list <- list(nk = meas_nk, temra = meas_temra)
+tags <- c("nk", "temra")
 
 for (tag in tags) {
   
@@ -1303,7 +1447,7 @@ for (tag in tags) {
               tag, length(tf_v), length(h), ncol(meas)))
 }
 
-# ---- validation ----
+# validation 
 for (tag in tags) {
   p <- readRDS("pkn_carnival.rds")
   m <- readRDS(sprintf("meas_%s_baseline.rds", tag))

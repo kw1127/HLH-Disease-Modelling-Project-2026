@@ -36,6 +36,7 @@
   library(patchwork)
   library(ggrepel)
   library(patchwork)
+  library(ashr)
   
   # Fixes the random number generator so that anything stochastic (UMAP,
   # clustering, downsampling) gives the same answer every time the script runs.
@@ -82,7 +83,6 @@
   # nCount = possible two cells in one droplet (doublet); high percent.mt = dying.
   p_qc_vln <- VlnPlot(pbmc, c("nFeature_RNA", "nCount_RNA", "percent.mt"),
                       ncol = 3, pt.size = 0.05)
-  ggsave("01_qc_violin.png", p_qc_vln, width = 10, height = 4, dpi = 300)
   
   # Plot the relationships between different QC metrics.
   # plot1: nCount_RNA (x) vs percent.mt (y): checks whether mito % relates to sequencing depth.
@@ -90,15 +90,6 @@
   
   # plot2: nCount_RNA (x) vs nFeature_RNA (y): counts vs genes detected per cell.
   p2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-  ggsave("02_qc_scatter.png", p1 + p2, width = 10, height = 4, dpi = 300)
-  
-  fig1 <- wrap_elements(p_qc_vln) / (p1 + p2) +
-    plot_annotation(
-      title = "Figure 1: Quality control of healthy PBMC scRNA-seq data",
-      tag_levels = "A"
-    )
-  
-  ggsave("Figure_01_qc.png", fig1, width = 10, height = 8, dpi = 300)
   
   metadata <- pbmc@meta.data
   
@@ -166,14 +157,11 @@
   p3 <- DimPlot(pbmc, reduction = "pca") + 
     NoLegend() 
   
-  ggsave("03_pca.png", DimPlot(pbmc, reduction = "pca") + NoLegend(), width = 6, height = 5, dpi = 300)
-  
   # Plots the variance captured by each PC in descending order.
   # Used to decide the optimal number of PCs for downstream steps.
   # Find the elbow: the point where the curve flattens and difference in variance captured plateaus.
   # Keep the PCs before the elbow (often ~10-20).
   p4 <- ElbowPlot(pbmc, ndims = 50)
-  ggsave("04_elbow.png", ElbowPlot(pbmc, ndims = 50), width = 6, height = 4, dpi = 300)
   
   fig1 <- wrap_elements(p_qc_vln) / (p1 + p2) / (p3 + p4) +
     plot_annotation(
@@ -232,21 +220,11 @@
       pbmc@meta.data[[paste0("louvain_res.", r)]])))
   print(comparison)
   
-  ggsave("05_leiden_resolutions.png",
-         DimPlot(pbmc, group.by = paste0("leiden_res.", res_seq),
-                 label = TRUE, ncol = 4) & NoLegend(),
-         width = 16, height = 8, dpi = 300)
-  
   leiden_res <- DimPlot(pbmc, group.by = paste0("leiden_res.", res_seq),
                         label = TRUE, label.size = 3, ncol = 4) &
     NoLegend() & 
     NoAxes() &
     theme(plot.title = element_text(size = 10))
-  
-  ggsave("05b_louvain_resolutions.png",
-         DimPlot(pbmc, group.by = paste0("louvain_res.", res_seq),
-                 label = TRUE, ncol = 4) & NoLegend(),
-         width = 16, height = 8, dpi = 300)
   
   louvain_res <- DimPlot(pbmc, group.by = paste0("louvain_res.", res_seq),
                          label = TRUE, label.size = 3, ncol = 4) &
@@ -862,6 +840,19 @@ res_temra <- results(dds_ct,
                      contrast = c("celltype", "CD8 TEMRA", "CD8 naive T"),
                      alpha = 0.05)
 
+# Extract the Wald statistics before lfc shrinkage
+# stat = log2FoldChange / standard error. It combines effect size and precision in one value.
+# A large fold change measured noisily gets a small statistic whereas the fold change alone would not distinguish the two.
+# This is the right input for TF activity inference, which needs a ranking that
+# already accounts for uncertainty.
+stat_temra <- setNames(res_temra$stat, rownames(res_temra))
+stat_temra <- stat_temra[!is.na(stat_temra)]
+
+res_temra <- lfcShrink(dds_ct,
+                       contrast = c("celltype", "CD8 TEMRA", "CD8 naive T"),
+                       type = "ashr",
+                       res = res_temra)
+
 # Contrast 2: NK vs the average of two naive types
 # With CD8 naive T as the reference, the group means are:
 #   CD8 naive T = b0
@@ -894,6 +885,14 @@ res_nk <- results(
   contrast = unname(con), 
   alpha = 0.05)
 
+stat_nk <- setNames(res_nk$stat, rownames(res_nk))
+stat_nk <- stat_nk[!is.na(stat_nk)]
+
+res_nk <- lfcShrink(dds_ct,
+                    contrast = unname(con),
+                    type = "ashr",
+                    res = res_nk)
+
 # Volcano plots for the two contrasts
 hlh_chr <- as.character(hlh)
 
@@ -905,9 +904,9 @@ anchors <- c("GNLY", "NKG7", "GZMB", "CCL5", "CD3D", "CCR7", "SELL", "TCF7")
 cap <- 150 # # y-axis ceiling; prevents small p-values from dominating the plot
 
 # Volcano 1: CD8 TEMRA vs CD8 naive T
-df_temra <- as.data.frame(res_temra) %>%
-  rownames_to_column("gene") %>%
-  filter(!is.na(padj)) %<% # DESeq2 sets padj to NA for filtered genes
+df_temra <- as.data.frame(res_temra) |>
+  rownames_to_column("gene") |>
+  filter(!is.na(padj)) |> # DESeq2 sets padj to NA for filtered genes
   mutate(
     y = pmin(-log10(padj), cap),
     sig = case_when(padj < 0.05 & log2FoldChange > 1 ~ "Up in effector",
@@ -932,7 +931,7 @@ p_temra <- ggplot(df_temra, aes(log2FoldChange, y)) +
   geom_text_repel(data = filter(df_temra, gene %in% hlh_chr),
                   aes(label = gene), size = 3.5, colour = "#1B7837",
                   fontface = "bold", max.overlaps = Inf, seed = 42,
-                  ylim = c(NA, cap * 0.9), nudge_y = -8,
+                  ylim = c(NA, cap * 0.8), nudge_y = -8,
                   box.padding = 0.5,
                   segment.colour = "#1B7837", segment.size = 0.3) +
   labs(x = "log2 fold change", y = "-log10 (padj)",
@@ -970,7 +969,7 @@ p_nk <- ggplot(df_nk, aes(log2FoldChange, y)) +
   geom_text_repel(data = filter(df_nk, gene %in% hlh_chr),
                   aes(label = gene), size = 3.5, colour = "#1B7837",
                   fontface = "bold", max.overlaps = Inf, seed = 42,
-                  ylim = c(NA, cap * 0.9), nudge_y = -8,
+                  ylim = c(NA, cap * 0.8), nudge_y = -8,
                   box.padding = 0.5,
                   segment.colour = "#1B7837", segment.size = 0.3) +
   
@@ -980,17 +979,6 @@ p_nk <- ggplot(df_nk, aes(log2FoldChange, y)) +
   theme_bw()
 
 ggsave("27_volcano_nk.png", p_nk, width = 9, height = 7, dpi = 300)
-
-# Extract the Wald statistics
-# stat = log2FoldChange / standard error. It combines effect size and precision
-# in one signed number: a large fold change measured noisily gets a small
-# statistic, whereas the fold change alone would not distinguish the two.
-# This is the right input for TF activity inference, which needs a ranking that
-# already accounts for uncertainty.
-stat_temra <- setNames(res_temra$stat, rownames(res_temra))
-stat_nk <- setNames(res_nk$stat, rownames(res_nk))
-stat_temra <- stat_temra[!is.na(stat_temra)]
-stat_nk <- stat_nk[!is.na(stat_nk)]
 
 saveRDS(stat_temra, "stat_temra.rds")
 saveRDS(stat_nk, "stat_nk.rds")

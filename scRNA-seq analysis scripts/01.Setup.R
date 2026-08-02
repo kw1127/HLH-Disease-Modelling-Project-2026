@@ -42,6 +42,7 @@ library(ggdist)
 library(msigdbr)
 library(fgsea)
 library(tidytext)
+library(stringr)
 
 # Fixes the random number generator so that anything stochastic (UMAP,
 # clustering, downsampling) gives the same answer every time the script runs.

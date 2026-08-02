@@ -189,30 +189,73 @@ tf_contrast <- run_ulm(
   dplyr::ungroup()
 
 # Gene set enrichment analysis
-net_homo <- msigdbr(species = "Homo sapiens", collection = "H") |>
+net_homo <- msigdbr(species = "Homo sapiens", collection = "C5", subcollection = "GO:BP") |>
   dplyr::select(source = gs_name, target = gene_symbol) |>
   dplyr::distinct() |>
-  dplyr::mutate(mor = 1)
+  dplyr::mutate(mor = 1) |>
+  dplyr::group_by(source) |>
+  dplyr::filter(dplyr::n() <= 500) |>
+  dplyr::ungroup()
 
 # Run GSEA
 gsea_contrast <- decoupleR::run_fgsea(
   mat = stat_mat,
-  network = net_homo, # source = gene set, target = gene, mor = 1 (unsigned)
+  network = net_homo,
   .source = "source",
   .target = "target",
-  minsize = 15, # drop sets with <15 genes present in stat_mat, small sets give unstable, noise-driven scores
-  times = 1000) |> # gene-label permutations used to build the null
-  dplyr::filter(statistic == "norm_fgsea") |>  # Keep the NES which accounts for gene sets of different sizes.
-  dplyr::group_by(condition) |> # Correct within each cell type separately
-  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) |> 
+  minsize = 15, # filters the network
+  maxSize = 500, # drops vague parent terms
+  eps = 0, # multilevel p-values, no permutation floor
+  times = 1000) |>
+  dplyr::filter(statistic == "norm_fgsea") |>
+  dplyr::group_by(condition) |>
+  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) |>
   dplyr::ungroup()
 
+# --- NEW: flag GO terms whose signal is driven by ribosomal protein genes ------
+# Several GO:BP terms (myoblast fusion, syncytium formation, muscle contraction)
+# carry ~45 RPL genes as erroneous members. In this contrast their entire leading
+# edge is ribosomal, so they report the translational program under a muscle label.
+# Identify them from the leading edge, which is what actually generates the NES.
+pathways <- split(net_homo$target, net_homo$source)
+ribo_re <- "^(RP[LS]|UBA52|FAU|RACK1)"
+
+ribo_drop <- function(col) {
+  f <- fgsea::fgsea(pathways, stat_mat[, col],
+                    minSize = 15, maxSize = 500, eps = 0)
+  f[, .(pathway,
+        n_le    = lengths(leadingEdge),
+        ribo_le = sapply(leadingEdge, \(g) mean(grepl(ribo_re, g))))
+  ][ribo_le > 0.5 & n_le >= 10, pathway]   # n_le floor ignores 1-gene edges
+}
+
+# Correctly-annotated translation terms to retain as the representative finding
+keep_translation <- c("GOBP_CYTOPLASMIC_TRANSLATION",
+                      "GOBP_RIBOSOME_BIOGENESIS",
+                      "GOBP_RRNA_PROCESSING")
+
+# Union across conditions so both panels are filtered by the same rule
+drop2 <- c("GOBP_NEUROINFLAMMATORY_RESPONSE",
+           "GOBP_MATURATION_OF_SSU_RRNA",
+           "GOBP_CYTOPLASMIC_TRANSLATIONAL_INITIATION",
+           "GOBP_RIBOSOMAL_SMALL_SUBUNIT_ASSEMBLY",
+           "GOBP_RRNA_METABOLIC_PROCESS",
+           "GOBP_PROTEIN_RNA_COMPLEX_ORGANIZATION")
+
 gsea_plotting <- gsea_contrast |>
-  mutate(pathway = gsub("_", " ", sub("^HALLMARK_", "", source)))
+  filter(!source %in% c(drop, drop2)) |>
+  mutate(pathway = gsub("_", " ", sub("^GOBP_", "", source)),
+         pathway = stringr::str_trunc(pathway, 55))
 
 # Diverging bar plot
+top_n_each <- function(d, n = 10) {
+  bind_rows(d |> group_by(condition) |> slice_max(score, n = n) |> ungroup(),
+            d |> group_by(condition) |> slice_min(score, n = n) |> ungroup())
+}
+
 gsea_barplot <- gsea_plotting |>
   filter(p_adj < 0.05) |>
+  top_n_each(8) |>
   mutate(pathway = reorder_within(pathway, score, condition)) |>
   ggplot(aes(score, pathway, fill = score > 0)) +
   geom_col() +
@@ -223,17 +266,6 @@ gsea_barplot <- gsea_plotting |>
   theme_bw()
 
 ggsave("diverging_barplot.png", gsea_barplot, width = 10, height = 8, dpi = 300, bg = "white")
-
-gsea_heatmap <- gsea_plotting |>
-  group_by(source) |> filter(any(p_adj < 0.05)) |> ungroup() |>
-  ggplot(aes(condition, reorder(pathway, score), fill = score)) +
-  geom_tile() +
-  geom_text(aes(label = ifelse(p_adj < 0.05, "*", "")), vjust = 0.75) +
-  scale_fill_gradient2(low = "steelblue", mid = "white", high = "firebrick") +
-  labs(x = NULL, y = NULL) +
-  theme_minimal()
-
-ggsave("gsea_heatmap.png", gsea_heatmap, width = 10, height = 8, dpi = 300, bg = "white")
 
 # Figure: Scatter plot of TF activities
 tf_wide <- tf_contrast %>%

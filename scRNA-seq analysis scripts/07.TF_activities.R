@@ -188,7 +188,54 @@ tf_contrast <- run_ulm(
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
   dplyr::ungroup()
 
-# Plot: Scatter plot of TF activities
+# Gene set enrichment analysis
+net_homo <- msigdbr(species = "Homo sapiens", collection = "H") |>
+  dplyr::select(source = gs_name, target = gene_symbol) |>
+  dplyr::distinct() |>
+  dplyr::mutate(mor = 1)
+
+# Run GSEA
+gsea_contrast <- decoupleR::run_fgsea(
+  mat = stat_mat,
+  network = net_homo, # source = gene set, target = gene, mor = 1 (unsigned)
+  .source = "source",
+  .target = "target",
+  minsize = 15, # drop sets with <15 genes present in stat_mat, small sets give unstable, noise-driven scores
+  times = 1000) |> # gene-label permutations used to build the null
+  dplyr::filter(statistic == "norm_fgsea") |>  # Keep the NES which accounts for gene sets of different sizes.
+  dplyr::group_by(condition) |> # Correct within each cell type separately
+  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) |> 
+  dplyr::ungroup()
+
+gsea_plotting <- gsea_contrast |>
+  mutate(pathway = gsub("_", " ", sub("^HALLMARK_", "", source)))
+
+# Diverging bar plot
+gsea_barplot <- gsea_plotting |>
+  filter(p_adj < 0.05) |>
+  mutate(pathway = reorder_within(pathway, score, condition)) |>
+  ggplot(aes(score, pathway, fill = score > 0)) +
+  geom_col() +
+  scale_y_reordered() +
+  facet_wrap(~ condition, scales = "free_y") +
+  scale_fill_manual(values = c("steelblue", "firebrick"), guide = "none") +
+  labs(x = "NES", y = NULL) +
+  theme_bw()
+
+ggsave("diverging_barplot.png", gsea_barplot, width = 10, height = 8, dpi = 300, bg = "white")
+
+gsea_heatmap <- gsea_plotting |>
+  group_by(source) |> filter(any(p_adj < 0.05)) |> ungroup() |>
+  ggplot(aes(condition, reorder(pathway, score), fill = score)) +
+  geom_tile() +
+  geom_text(aes(label = ifelse(p_adj < 0.05, "*", "")), vjust = 0.75) +
+  scale_fill_gradient2(low = "steelblue", mid = "white", high = "firebrick") +
+  labs(x = NULL, y = NULL) +
+  theme_minimal()
+
+ggsave("gsea_heatmap.png", gsea_heatmap, width = 10, height = 8, dpi = 300, bg = "white")
+
+# Figure: Scatter plot of TF activities
 tf_wide <- tf_contrast %>%
   mutate(cond = recode(condition, "CD8 TEMRA" = "temra", "NK" = "nk")) %>%
   select(source, cond, score, p_adj) %>%
@@ -209,7 +256,7 @@ tf_wide <- tf_contrast %>%
 
 lim_contrast <- max(abs(c(tf_wide$score_nk, tf_wide$score_temra)), na.rm = TRUE) * 1.05
 
-# label the strongest shared TFs plus the biggest outliers from the diagonal
+# label the strongest shared TFs and the biggest outliers from the diagonal
 label_contrast <- tf_wide %>%
   filter(class != "n.s.") %>%
   filter(rank(-(score_nk^2 + score_temra^2)) <= 15 | rank(-abs(delta)) <= 10)
@@ -234,7 +281,7 @@ tf_scatter <- ggplot(tf_wide, aes(score_nk, score_temra)) +
 
 ggsave("tf_scatter.png", tf_scatter, width = 10, height = 10, dpi = 300, bg = "white")
 
-# Plot 2: Dumbbell of shared TFs
+# Figure: Dumbbell of shared TFs
 shared_tfs <- tf_wide %>%
   filter(class == "Shared") %>%
   mutate(source = reorder(source, delta))
@@ -259,10 +306,10 @@ tf_dumbbell <- ggplot(shared_tfs) +
 
 ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
 
-# Plot 3: which TFs regulate primary HLH-associated genes?
+# Figure: which TFs regulate primary HLH-associated genes?
 hlh_chr <- as.character(hlh)
 
-# Shared: observed Wald statistics for the HLH genes
+# Shared: Wald statistics for the HLH genes
 hlh_obs_wide <- tibble(
   gene = hlh_chr,
   nk = as.numeric(stat_nk[hlh_chr]),
@@ -277,7 +324,7 @@ hlh_obs_long <- hlh_obs_wide %>%
 # genes absent from one or both contrasts will be NA — check before plotting
 hlh_obs_wide %>% filter(if_any(c(nk, temra), is.na))
 
-# Figure 3a: observed behaviour of the HLH genes
+# Figure: HLH genes
 p_hlh_obs <- hlh_obs_wide %>%
   filter(!is.na(nk), !is.na(temra)) %>%
   mutate(gene = reorder(gene, (nk + temra) / 2)) %>%

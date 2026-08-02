@@ -39,6 +39,9 @@ library(ggrepel)
 library(patchwork)
 library(ashr)
 library(ggdist)
+library(msigdbr)
+library(fgsea)
+library(tidytext)
 
 # Fixes the random number generator so that anything stochastic (UMAP,
 # clustering, downsampling) gives the same answer every time the script runs.

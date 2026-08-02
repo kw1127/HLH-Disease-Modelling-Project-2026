@@ -1,0 +1,298 @@
+# ============================================================
+# 12. Transcription factor activity (decoupleR + CollecTRI)
+#
+# A TF's own mRNA level is a poor measure of its activity, because activity is
+# controlled by phosphorylation, localisation and cofactors. Instead, activity is
+# inferred from the behaviour of the genes it regulates.
+# ============================================================
+
+# CollecTRI is a curated set of TF-target relationships. Each edge carries a "mor"
+# (mode of regulation): +1 if the TF activates that target, -1 if it represses.
+# split_complexes = FALSE keeps complexes such as NF-kB as one entry rather than
+# splitting them into subunits.
+collectri <- get_collectri(organism = "human", split_complexes = FALSE)
+
+# Activity per cell type
+# Collapse the pseudobulk samples to one mean profile per cell type.
+# tapply() groups the values of each gene by cell type and averages within group.
+ct <- droplevels(factor(meta_sub[colnames(mat_ct), "celltype"]))
+mat_ct_mean <- t(apply(mat_ct, 1, function(x) tapply(x, ct, mean)))
+
+# Centre and scale each gene across the four cell types (z-score per row).
+#
+# Why this is necessary: the linear model below regresses expression on regulon
+# membership. On raw VST values the fit is driven by absolute expression level,
+# which is shared by all four cell types, so every TF would score high. After
+# centering, each value says "how far above or below this gene's own average". 
+#
+# What this means for interpretation: scores are relative to the mean of the four
+# cell types, not to a global average. A TF uniformly high in all
+# lymphocytes but absent in monocytes now looks flat, not high.
+mat_z <- t(scale(t(mat_ct_mean)))
+mat_z <- mat_z[stats::complete.cases(mat_z), ]
+
+# Univariate linear model (ULM).
+# For each TF and each cell type, fit: expression ~ regulon membership, where
+# membership is 0 for genes the TF does not regulate, +1 for activated targets
+# and -1 for repressed ones. The t-value of the fitted slope is the activity score.
+#
+# A high positive score means activated targets are up and repressed targets are
+# down, which is what an active TF produces.
+#
+# "Univariate" means each TF is tested on its own. That is fast and robust, but
+# it does not account for TFs that share target genes, so overlapping regulons
+# can give correlated scores.
+#
+# minsize = 5 excludes TFs with fewer than 5 measured targets, where the slope
+# would be estimated from too little data to trust.
+tf_acts <- run_ulm(
+  mat = mat_z, 
+  network = collectri,
+  .source = "source", 
+  .target = "target", 
+  .mor = "mor",
+  minsize = 5) %>%
+  dplyr::filter(statistic == "ulm") %>%
+  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH"))
+
+# Reshape to a TF x cell type matrix for plotting.
+tf_mat <- tf_acts %>%
+  pivot_wider(id_cols = source, names_from = condition, values_from = score) %>%
+  column_to_rownames("source") %>%
+  as.matrix()
+
+# Ranked by largest absolute score, not by significance and not by variance.
+#
+# Not by FDR: with only four conditions, the z-scoring above compresses the
+# t-values, so few tests clear BH correction. Those that do are the TFs with the
+# largest regulons (MYC, SP1, JUN), because a bigger regulon gives a more precise
+# slope, not a more meaningful one.
+#
+# Not by standard deviation: with n = 4, and two of those (CD4 and CD8 naive)
+# being near-identical, an SD over four numbers is unstable and cannot tell
+# "high in one cell type" apart from "splits 2 versus 2".
+tf_ranked <- tf_acts %>%
+  group_by(source) %>%
+  summarise(max_abs = max(abs(score)), # strongest activity in any cell type
+            best_padj = min(p_adj), .groups = "drop") %>%
+  arrange(desc(max_abs))
+
+top_tfs <- head(tf_ranked$source, 40)
+
+# Transpose so cell types are rows and TFs are columns.
+top_acts_mat <- t(tf_mat[top_tfs, ])
+
+# Fix the row order naive -> effector, so the gradient reads down the plot
+# instead of being rearranged by clustering.
+row_order <- c("CD4 naive T", "CD8 naive T", "CD8 TEMRA", "NK")
+top_acts_mat <- top_acts_mat[intersect(row_order, rownames(top_acts_mat)), ]
+
+# module annotation
+# Assigned from known biology
+modules <- list(
+  "Effector / IFN" = c("TBX21","STAT1","IRF1","IRF3","IRF5",
+                       "NFKB","RUNX1","RUNX2","PML"),
+  "MHC class II" = c("CIITA","RFX5","RFXANK","RFXAP"),
+  "Growth / metabolic" = c("MYC","MZF1","SP1","NFYA","NFYB",
+                           "SREBF1","SREBF2","NR1H3","ATF6"),
+  "Stress / AP-1" = c("JUN","AP1","ATF2","DDIT3","NFE2L2",
+                      "TP53","BACH1","LITAF"))
+
+# Everything starts as "Other" and is reassigned if it appears in a module.
+Function <- setNames(rep("Other", ncol(top_acts_mat)), colnames(top_acts_mat))
+for (m in names(modules))
+  Function[names(Function) %in% modules[[m]]] <- m
+
+# pheatmap needs a data frame whose rownames match the column names of the matrix.
+ann_col <- data.frame(Function = factor(
+  Function, levels = c(names(modules), "Other")),
+  row.names = names(Function))
+
+ann_colors <- list(Function = c(
+  "Effector / IFN" = "#C0504D",
+  "MHC class II" = "#9970AB",
+  "Growth / metabolic" = "#4F81BD",
+  "Stress / AP-1" = "#E8A33D",
+  "Other" = "grey85"))
+
+# significance stars 
+# Recovers the FDR information dropped by ranking on effect size:
+# the reader can see both magnitude (colour) and significance (star) together.
+star_mat <- tf_acts %>%
+  dplyr::filter(source %in% colnames(top_acts_mat)) %>%
+  dplyr::mutate(lab = dplyr::case_when(
+    p_adj < 0.001 ~ "***",
+    p_adj < 0.01  ~ "**",
+    p_adj < 0.05  ~ "*",
+    TRUE ~ "")) %>%
+  pivot_wider(id_cols = condition, names_from = source, values_from = lab) %>%
+  column_to_rownames("condition") %>%
+  as.matrix()
+
+# Reorder to exactly match the heatmap, or the stars would land on wrong cells.
+star_mat <- star_mat[rownames(top_acts_mat), colnames(top_acts_mat)]
+
+# heatmap 
+colors.use <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(100)
+lim <- quantile(abs(top_acts_mat), 0.95)
+my_breaks <- c(seq(-lim, 0, length.out = 51),
+               seq(lim / 50, lim, length.out = 50))
+
+pheatmap(
+  mat = top_acts_mat,
+  color = colors.use,
+  breaks = my_breaks,
+  border_color = "white",
+  cellwidth = 15, 
+  cellheight = 15,
+  cluster_rows = FALSE,         
+  gaps_row = 2,                  
+  cutree_cols = 3,             
+  treeheight_col = 25,
+  angle_col = 90,
+  annotation_col = ann_col,
+  annotation_colors = ann_colors,
+  display_numbers = star_mat,
+  number_color = "black",
+  fontsize_number = 7,
+  fontsize_row = 11,
+  fontsize_col = 8,
+  main = "TF activity: cytotoxic effectors vs naive T",
+  filename = "28_tf_acts_lymphoid.pdf",
+  width = ncol(top_acts_mat) * 15/72 + 5,
+  height = nrow(top_acts_mat) * 15/72 + 3.5)
+
+# TF activity per contrast
+# The heatmap above describes cell types. This describes the two comparisons,
+# which is what the network modelling needs: each column is already a difference
+# from naive, so TFs shared by NK and TEMRA show up in both rather than
+# cancelling against each other.
+
+# The two contrasts were filtered independently, so their gene sets differ.
+# Intersecting first prevents misalignment when they are bound into one matrix.
+g <- intersect(names(stat_temra), names(stat_nk))
+stat_mat <- cbind("CD8 TEMRA" = stat_temra[g], "NK" = stat_nk[g])
+
+# No centering here. Unlike the expression matrix, these values are already
+# differences relative to naive, so the baseline is built into the contrast.
+# Centering across two columns would remove exactly the signal being measured.
+tf_contrast <- run_ulm(
+  mat = stat_mat,
+  network = collectri,
+  .source = "source",
+  .target = "target",
+  .mor = "mor",
+  minsize = 5) %>%
+  dplyr::filter(statistic == "ulm") %>%
+  dplyr::group_by(condition) %>%
+  dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
+  dplyr::ungroup()
+
+# Plot: Scatter plot of TF activities
+tf_wide <- tf_contrast %>%
+  mutate(cond = recode(condition, "CD8 TEMRA" = "temra", "NK" = "nk")) %>%
+  select(source, cond, score, p_adj) %>%
+  pivot_wider(names_from = cond, values_from = c(score, p_adj)) %>%
+  mutate(
+    sig_nk = p_adj_nk < 0.05,
+    sig_temra = p_adj_temra < 0.05,
+    class = case_when(
+      sig_nk & sig_temra & sign(score_nk) == sign(score_temra) ~ "Shared",
+      sig_nk & sig_temra ~ "Opposite",
+      sig_nk ~ "NK only",
+      sig_temra ~ "TEMRA only",
+      TRUE ~ "n.s."
+    ),
+    delta = score_temra - score_nk
+  ) %>%
+  mutate(class = factor(class, levels = c("Shared", "NK only", "TEMRA only", "Opposite", "n.s.")))
+
+lim_contrast <- max(abs(c(tf_wide$score_nk, tf_wide$score_temra)), na.rm = TRUE) * 1.05
+
+# label the strongest shared TFs plus the biggest outliers from the diagonal
+label_contrast <- tf_wide %>%
+  filter(class != "n.s.") %>%
+  filter(rank(-(score_nk^2 + score_temra^2)) <= 15 | rank(-abs(delta)) <= 10)
+
+tf_scatter <- ggplot(tf_wide, aes(score_nk, score_temra)) +
+  geom_hline(yintercept = 0, colour = "grey80", linewidth = 0.3) +
+  geom_vline(xintercept = 0, colour = "grey80", linewidth = 0.3) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey55") +
+  geom_point(aes(colour = class), size = 2, alpha = 0.85) +
+  geom_text_repel(data = label_contrast, aes(label = source), size = 3,
+                  max.overlaps = Inf, box.padding = 0.35, segment.colour = "grey60") +
+  scale_colour_manual(values = c(
+    "Shared" = "#B2182B", "NK only" = "#2166AC",
+    "TEMRA only" = "#4DAF4A", "Opposite" = "#984EA3", "n.s." = "grey80"),
+    drop = TRUE) +
+  coord_equal(xlim = c(-lim_contrast, lim_contrast), ylim = c(-lim_contrast, lim_contrast)) +
+  labs(x = "NK vs naive T",
+       y = "CD8 TEMRA vs naive CD8 T",
+       colour = NULL) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.minor = element_blank(), legend.position = "bottom")
+
+ggsave("tf_scatter.png", tf_scatter, width = 10, height = 10, dpi = 300, bg = "white")
+
+# Plot 2: Dumbbell of shared TFs
+shared_tfs <- tf_wide %>%
+  filter(class == "Shared") %>%
+  mutate(source = reorder(source, delta))
+
+lim_shared <- max(abs(c(shared_tfs$score_nk, shared_tfs$score_temra))) * 1.08
+
+tf_dumbbell <- ggplot(shared_tfs) +
+  geom_vline(xintercept = 0, linewidth = 0.4, colour = "grey40") +
+  geom_segment(aes(x = score_nk, xend = score_temra, y = source, yend = source),
+               colour = "grey65", linewidth = 0.7) +
+  geom_point(aes(score_nk, source, colour = "NK"), size = 2.6, alpha = 0.75) +
+  geom_point(aes(score_temra, source, colour = "CD8 TEMRA"), size = 2.6, alpha = 0.75) +
+  scale_colour_manual(values = c("NK" = "#2166AC", "CD8 TEMRA" = "#B2182B"),
+                      breaks = c("NK", "CD8 TEMRA"), name = NULL) +
+  scale_x_continuous(limits = c(-lim_shared, lim_shared)) +
+  labs(x = "TF activity score", y = NULL) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.major.y = element_line(linewidth = 0.2, colour = "grey92"),
+        panel.grid.minor = element_blank(),
+        axis.text.y = element_text(size = 8),
+        legend.position = "bottom")
+
+ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
+
+# Plot 3: which TFs regulate primary HLH-associated genes?
+hlh_chr <- as.character(hlh)
+
+# Shared: observed Wald statistics for the HLH genes
+hlh_obs_wide <- tibble(
+  gene = hlh_chr,
+  nk = as.numeric(stat_nk[hlh_chr]),
+  temra = as.numeric(stat_temra[hlh_chr])
+) %>%
+  mutate(delta = temra - nk)
+
+hlh_obs_long <- hlh_obs_wide %>%
+  select(gene, NK = nk, `CD8 TEMRA` = temra) %>%
+  pivot_longer(-gene, names_to = "condition", values_to = "obs")
+
+# genes absent from one or both contrasts will be NA — check before plotting
+hlh_obs_wide %>% filter(if_any(c(nk, temra), is.na))
+
+# Figure 3a: observed behaviour of the HLH genes
+p_hlh_obs <- hlh_obs_wide %>%
+  filter(!is.na(nk), !is.na(temra)) %>%
+  mutate(gene = reorder(gene, (nk + temra) / 2)) %>%
+  ggplot() +
+  geom_vline(xintercept = 0, linewidth = 0.4, colour = "grey40") +
+  geom_segment(aes(x = nk, xend = temra, y = gene, yend = gene),
+               colour = "grey65", linewidth = 0.7) +
+  geom_point(aes(nk, gene, colour = "NK"), size = 3, alpha = 0.75) +
+  geom_point(aes(temra, gene, colour = "CD8 TEMRA"), size = 3, alpha = 0.75) +
+  scale_colour_manual(values = c("NK" = "#2166AC", "CD8 TEMRA" = "#B2182B"),
+                      breaks = c("NK", "CD8 TEMRA"), name = NULL) +
+  labs(x = "Wald statistic", y = NULL) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.major.y = element_line(linewidth = 0.2, colour = "grey92"),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom")
+
+ggsave("hlh_observed.png", p_hlh_obs, width = 6.5, height = 4, dpi = 300, bg = "white")

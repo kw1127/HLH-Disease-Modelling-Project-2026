@@ -129,6 +129,7 @@ saveRDS(tf_contrast, "tf_contrast.rds")
 g_sig <- igraph::graph_from_data_frame(
   sig %>% dplyr::select(source, target), directed = TRUE)
 
+# hlh_de is filtered to p.adj < 0.05, so non differentially expressed HLH genes are not included
 hlh_audit <- tibble::tibble(gene = hlh_chr) %>%
   dplyr::mutate(
     n_tf_regulators = vapply(gene, function(g) sum(trn$target == g), integer(1)),

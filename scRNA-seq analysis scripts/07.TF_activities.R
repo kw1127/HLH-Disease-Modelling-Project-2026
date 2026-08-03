@@ -121,6 +121,7 @@ ann_colors <- list(Function = c(
 star_mat <- tf_acts %>%
   dplyr::filter(source %in% colnames(top_acts_mat)) %>%
   dplyr::mutate(lab = dplyr::case_when(
+    p_adj < 0.0001 ~ "****",
     p_adj < 0.001 ~ "***",
     p_adj < 0.01  ~ "**",
     p_adj < 0.05  ~ "*",
@@ -162,12 +163,14 @@ pheatmap(
   width = ncol(top_acts_mat) * 15/72 + 5,
   height = nrow(top_acts_mat) * 15/72 + 3.5)
 
+# Part two
+#
 # TF activity per contrast
 # The heatmap above describes cell types. This describes the two comparisons,
 # which is what the network modelling needs: each column is already a difference
 # from naive, so TFs shared by NK and TEMRA show up in both rather than
 # cancelling against each other.
-
+#
 # The two contrasts were filtered independently, so their gene sets differ.
 # Intersecting first prevents misalignment when they are bound into one matrix.
 g <- intersect(names(stat_temra), names(stat_nk))
@@ -217,6 +220,11 @@ gsea_contrast <- decoupleR::run_fgsea(
 # carry ~45 RPL genes as erroneous members. In this contrast their entire leading
 # edge is ribosomal, so they report the translational program under a muscle label.
 # Identify them from the leading edge, which is what actually generates the NES.
+# Correctly-annotated translation terms to retain as the representative finding
+keep_translation <- c("GOBP_CYTOPLASMIC_TRANSLATION",
+                      "GOBP_RIBOSOME_BIOGENESIS",
+                      "GOBP_RRNA_PROCESSING")
+
 pathways <- split(net_homo$target, net_homo$source)
 ribo_re <- "^(RP[LS]|UBA52|FAU|RACK1)"
 
@@ -229,10 +237,8 @@ ribo_drop <- function(col) {
   ][ribo_le > 0.5 & n_le >= 10, pathway]   # n_le floor ignores 1-gene edges
 }
 
-# Correctly-annotated translation terms to retain as the representative finding
-keep_translation <- c("GOBP_CYTOPLASMIC_TRANSLATION",
-                      "GOBP_RIBOSOME_BIOGENESIS",
-                      "GOBP_RRNA_PROCESSING")
+drop <- unique(unlist(lapply(colnames(stat_mat), ribo_drop)))
+drop <- setdiff(drop, keep_translation)
 
 # Union across conditions so both panels are filtered by the same rule
 drop2 <- c("GOBP_NEUROINFLAMMATORY_RESPONSE",
@@ -339,8 +345,6 @@ tf_dumbbell <- ggplot(shared_tfs) +
 ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
 
 # Figure: which TFs regulate primary HLH-associated genes?
-hlh_chr <- as.character(hlh)
-
 # Shared: Wald statistics for the HLH genes
 hlh_obs_wide <- tibble(
   gene = hlh_chr,
@@ -354,9 +358,9 @@ hlh_obs_long <- hlh_obs_wide %>%
   pivot_longer(-gene, names_to = "condition", values_to = "obs")
 
 # genes absent from one or both contrasts will be NA — check before plotting
-hlh_obs_wide %>% filter(if_any(c(nk, temra), is.na))
+hlh_obs_wide %>% 
+  filter(if_any(c(nk, temra), is.na))
 
-# Figure: HLH genes
 p_hlh_obs <- hlh_obs_wide %>%
   filter(!is.na(nk), !is.na(temra)) %>%
   mutate(gene = reorder(gene, (nk + temra) / 2)) %>%

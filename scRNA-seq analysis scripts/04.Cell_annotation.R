@@ -333,4 +333,4 @@ evidence %>%
   gt::gt() %>%
   gt::tab_header(title = "Evidence supporting cell type assignment") %>%
   gt::tab_source_note("Clusters from Leiden clustering at resolution 0.7") %>%
-  gt::gtsave("supp_table_annotation.png")   
+  gt::gtsave("supp_table_annotation.png")

@@ -145,6 +145,34 @@ hlh_audit <- tibble(gene = hlh_chr) %>%
 
 hlh_audit
 
+
+# Figure: Why only some HLH genes can enter the model  
+#
+# Four requirements, applied in order. A gene fails at the first one it misses.
+hlh_coverage <- hlh_audit %>%
+  transmute(gene,
+            `Has CollecTRI\nregulator`      = n_tf_regulators > 0,
+            `Regulator present\nin PKN`     = n_regs_in_pkn > 0,
+            `DE in NK`                      = de_nk,
+            `DE in CD8 TEMRA`               = de_temra) %>%
+  pivot_longer(-gene, names_to = "criterion", values_to = "met") %>%
+  mutate(gene = factor(gene, levels = rev(hlh_audit$gene)),
+         criterion = factor(criterion, levels = c(
+           "Has CollecTRI\nregulator", "Regulator present\nin PKN",
+           "DE in NK", "DE in CD8 TEMRA"))) %>%
+  ggplot(aes(criterion, gene, fill = met)) +
+  geom_tile(colour = "white", linewidth = 0.8) +
+  scale_fill_manual(values = c(`TRUE` = "#4F81BD", `FALSE` = "grey88"),
+                    labels = c(`TRUE` = "Met", `FALSE` = "Not met"),
+                    name = NULL) +
+  labs(x = NULL, y = NULL) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid = element_blank(),
+        legend.position = "bottom")
+
+ggsave("Figure_hlh_coverage.png", hlh_coverage, width = 5.5, height = 4,
+       dpi = 300, bg = "white")
+
 # Evidence that the exclusions are structural, not artefacts
 #
 # PRF1 has no usable outgoing edges anywhere in OmniPath at any curation level:

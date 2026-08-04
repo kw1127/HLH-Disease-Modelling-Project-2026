@@ -342,22 +342,17 @@ tf_dumbbell <- ggplot(shared_tfs) +
 
 ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
 
-# Which TFs regulate primary HLH-associated genes?
+
 # Shared: Wald statistics for the HLH genes
 hlh_obs_wide <- tibble(
   gene = hlh_chr,
   nk = as.numeric(stat_nk[hlh_chr]),
-  temra = as.numeric(stat_temra[hlh_chr])
-) %>%
+  temra = as.numeric(stat_temra[hlh_chr])) %>%
   mutate(delta = temra - nk)
 
 hlh_obs_long <- hlh_obs_wide %>%
   select(gene, NK = nk, `CD8 TEMRA` = temra) %>%
   pivot_longer(-gene, names_to = "condition", values_to = "obs")
-
-# genes absent from one or both contrasts will be NA — check before plotting
-hlh_obs_wide %>% 
-  filter(if_any(c(nk, temra), is.na))
 
 p_hlh_obs <- hlh_obs_wide %>%
   filter(!is.na(nk), !is.na(temra)) %>%

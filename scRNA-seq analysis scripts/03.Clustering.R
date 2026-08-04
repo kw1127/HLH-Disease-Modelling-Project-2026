@@ -73,15 +73,15 @@ gtsave(clustering_tbl, "table_ari_leiden_louvain.docx")
 gtsave(clustering_tbl, "table1.html")
 
 leiden_res <- DimPlot(pbmc, group.by = paste0("leiden_res.", res_seq),
-                      label = TRUE, label.size = 3, ncol = 4) &
-  NoLegend() & 
-  NoAxes() &
+                      label = TRUE, label.size = 3, ncol = 4) +
+  NoLegend() + 
+  NoAxes() +
   theme(plot.title = element_text(size = 10))
 
 louvain_res <- DimPlot(pbmc, group.by = paste0("louvain_res.", res_seq),
-                       label = TRUE, label.size = 3, ncol = 4) &
-  NoLegend() & 
-  NoAxes() &
+                       label = TRUE, label.size = 3, ncol = 4) +
+  NoLegend() + 
+  NoAxes() +
   theme(plot.title = element_text(size = 10))
 
 sup1 <- wrap_elements(leiden_res) / wrap_elements(louvain_res) +

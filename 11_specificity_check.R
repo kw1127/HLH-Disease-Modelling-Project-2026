@@ -149,6 +149,15 @@ enrich <- tf_all_ct %>%
 
 enrich
 
+by_gene <- trn %>%
+  dplyr::inner_join(tf_all_ct, by = "source") %>%
+  dplyr::group_by(condition, target) %>%
+  dplyr::summarise(n_reg      = dplyr::n(),
+                   n_sig      = sum(p_adj < 0.05),
+                   median_abs = round(median(abs(score)), 2),
+                   .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = condition,
+                     values_from = c(n_sig, median_abs))
 
 # Figure: Specificity of the HLH regulatory layer      
 #
@@ -198,21 +207,3 @@ pA2 <- by_gene %>%
 figA <- pA1 + pA2 + plot_annotation(tag_levels = "A")
 ggsave("Figure_specificity.png", figA, width = 11, height = 4.5,
        dpi = 300, bg = "white")
-
-# which HLH genes each regulator targets
-tf_targets <- trn %>%
-  dplyr::group_by(source) %>%
-  dplyr::summarise(targets = paste(sort(unique(target)), collapse = ", "),
-                   .groups = "drop")
-
-by_gene <- trn %>%
-  dplyr::inner_join(tf_all_ct, by = "source") %>%
-  dplyr::group_by(condition, target) %>%
-  dplyr::summarise(n_reg      = dplyr::n(),
-                   n_sig      = sum(p_adj < 0.05),
-                   median_abs = round(median(abs(score)), 2),
-                   .groups = "drop") %>%
-  tidyr::pivot_wider(names_from = condition,
-                     values_from = c(n_sig, median_abs))
-
-by_gene

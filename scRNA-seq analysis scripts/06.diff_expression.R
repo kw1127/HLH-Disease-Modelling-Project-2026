@@ -146,7 +146,9 @@ dds_ct <- DESeq(dds_ct, quiet = TRUE)
 # line is the fitted trend, blue points are the final shrunken values. Genes
 # should sit near the trend and shrink toward it; a cloud with no trend means
 # the model has not fitted well.
-dispersion_plot <- as.ggplot(~plotDispEsts(dds_ct, main = NULL))
+dev.new()
+dispersion_plot <- ggplotify::as.ggplot(~plotDispEsts(dds_ct, main = NULL))
+dev.off()
 
 # Sample-to-sample distances on the VST values. Samples of the same cell type
 # should cluster together. Useful for spotting a mislabelled or outlier sample.

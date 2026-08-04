@@ -50,17 +50,16 @@ pbmc$singler.fine <- pred.fine$pruned.labels
 # Score heatmap: each cell's correlation against every reference label.
 # One bright row per cell = confident call. Several bright rows = the reference
 # cannot tell those subtypes apart at this level of detail.
-png("09_singler_scoreheatmap.png", width = 10, height = 8, units = "in", res = 300)
-plotScoreHeatmap(pred.main)
-dev.off()
+score_heatmap <- as.ggplot(plotScoreHeatmap(pred.main, silent = TRUE)$gtable)
+
 
 # Delta = the assigned label's score minus the median score across all other
 # labels. It measures how much better the winner was than the field.
 # Large delta = confident. Small delta = the call was marginal and gets pruned.
 # If an entire label's delta distribution sits low, that cell type is probably
 # not actually present in the sample.
-ggsave("10_singler_delta.png", plotDeltaDistribution(pred.main, ncol = 4),
-       width = 12, height = 8, dpi = 300)
+delta_distribution <- plotDeltaDistribution(pred.main, ncol = 4)
+
 summary(is.na(pred.main$pruned.labels))
 
 # ============================================================
@@ -74,10 +73,15 @@ tab <- table(Assigned = pred.main$pruned.labels, Cluster = pbmc$leiden_res.0.7)
 # margin = 2 converts to proportions within each column, i.e. what fraction of
 # each cluster carries each label. Without this, big clusters dominate the colour
 # scale regardless of how pure they are.
-png("11_singler_cluster_crosstab.png", width = 8, height = 6, units = "in", res = 300)
-pheatmap(prop.table(tab, margin = 2))
-dev.off()
+check_labels <- as.ggplot(pheatmap(prop.table(tab, margin = 2), silent = TRUE)$gtable)
 
+label_check_supp <- score_heatmap / delta_distribution / check_labels +
+  plot_layout(heights = c(1, 1, 0.9)) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 16, face = "bold"))
+
+ggsave("Supp_Figure_02_singler_qc.png", label_check_supp,
+       width = 10, height = 16, dpi = 300, bg = "white")
 # ============================================================
 # 8. Protein-based annotation refinement
 # ============================================================

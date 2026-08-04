@@ -135,7 +135,7 @@ hlh_audit <- tibble(gene = hlh_chr) %>%
     n_tf_regulators = vapply(gene, function(g) sum(trn$target == g), integer(1)),
     n_regs_in_pkn   = vapply(gene, function(g)
       sum(trn$target == g & trn$source %in% pkn_nodes), integer(1)),
-    in_signalling   = gene %in% pkn_nodes,
+    in_signalling = gene %in% pkn_nodes,
     de_nk = gene %in% hlh_de$nk$target, # hlh_de is filtered to padj < 0.05, so non-DE genes are absent by design
     de_temra = gene %in% hlh_de$temra$target,
     can_enter = case_when(
@@ -145,33 +145,25 @@ hlh_audit <- tibble(gene = hlh_chr) %>%
 
 hlh_audit
 
+audit_tbl <- hlh_audit %>%
+  select(gene, n_tf_regulators, n_regs_in_pkn, in_signalling, de_nk, de_temra) %>%
+  gt() %>%
+  cols_label(gene = "Gene",
+             n_tf_regulators = "CollecTRI regulators",
+             n_regs_in_pkn = "Regulators in PKN",
+             in_signalling = "In signalling layer",
+             de_nk = "DE in NK",
+             de_temra = "DE in CD8 TEMRA") %>%
+  fmt(columns = c(in_signalling, de_nk, de_temra),
+      fns = function(x) ifelse(x, "Yes", "No")) %>%
+  tab_footnote("Genes with no CollecTRI regulator cannot enter the model at any
+                stage. STX11 and STXBP2 carry protein-level OmniPath edges, so
+                appear in the signalling layer, but this design does not use
+                them as signalling nodes.") %>%
+  tab_options(table.font.size = 11)
 
-# Figure: Why only some HLH genes can enter the model  
-#
-# Four requirements, applied in order. A gene fails at the first one it misses.
-hlh_coverage <- hlh_audit %>%
-  transmute(gene,
-            `Has CollecTRI\nregulator`      = n_tf_regulators > 0,
-            `Regulator present\nin PKN`     = n_regs_in_pkn > 0,
-            `DE in NK`                      = de_nk,
-            `DE in CD8 TEMRA`               = de_temra) %>%
-  pivot_longer(-gene, names_to = "criterion", values_to = "met") %>%
-  mutate(gene = factor(gene, levels = rev(hlh_audit$gene)),
-         criterion = factor(criterion, levels = c(
-           "Has CollecTRI\nregulator", "Regulator present\nin PKN",
-           "DE in NK", "DE in CD8 TEMRA"))) %>%
-  ggplot(aes(criterion, gene, fill = met)) +
-  geom_tile(colour = "white", linewidth = 0.8) +
-  scale_fill_manual(values = c(`TRUE` = "#4F81BD", `FALSE` = "grey88"),
-                    labels = c(`TRUE` = "Met", `FALSE` = "Not met"),
-                    name = NULL) +
-  labs(x = NULL, y = NULL) +
-  theme_bw(base_size = 11) +
-  theme(panel.grid = element_blank(),
-        legend.position = "bottom")
+gtsave(audit_tbl, "Table_hlh_coverage.png", vwidth = 900, expand = 10)
 
-ggsave("Figure_hlh_coverage.png", hlh_coverage, width = 5.5, height = 4,
-       dpi = 300, bg = "white")
 
 # Evidence that the exclusions are structural, not artefacts
 #

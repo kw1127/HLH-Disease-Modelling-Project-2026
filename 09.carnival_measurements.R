@@ -23,35 +23,34 @@
 #         tf_aud.rds
 # =============================================================================
 
-library(dplyr); library(tibble)
-
-
 # Build the measurement objects
 hlh_tfs <- unique(trn$source)   # CollecTRI regulators of the 8 HLH genes
 
 make_measobj <- function(contrast, n_top = 50, force = hlh_tfs) {
-  d <- tf_contrast %>% filter(condition == contrast)
+  d <- tf_contrast %>% dplyr::filter(condition == contrast)
   
   top <- d %>%
-    filter(p_adj < 0.05) %>%
-    slice_max(abs(score), n = n_top) %>%
-    mutate(origin = "top_significant")
+    dplyr::filter(p_adj < 0.05) %>%
+    dplyr::slice_max(abs(score), n = n_top) %>%
+    dplyr::mutate(origin = "top_significant")
   
   # a TF that is both significant and an HLH regulator appears once, as
   # top_significant, so the two sets are a union rather than a sum
   forced <- d %>%
-    filter(source %in% force, !source %in% top$source) %>%
-    mutate(origin = "forced_hlh_regulator")
+    dplyr::filter(source %in% force, !source %in% top$source) %>%
+    dplyr::mutate(origin = "forced_hlh_regulator")
   
-  bind_rows(top, forced) %>% select(source, score, p_adj, origin)
+  dplyr::bind_rows(top, forced) %>%
+    dplyr::select(source, score, p_adj, origin)
 }
 
-meas_long <- bind_rows(
-  make_measobj("NK") %>% mutate(contrast = "nk"),
-  make_measobj("CD8 TEMRA") %>% mutate(contrast = "temra"))
+meas_long <- dplyr::bind_rows(
+  make_measobj("NK")        %>% dplyr::mutate(contrast = "nk"),
+  make_measobj("CD8 TEMRA") %>% dplyr::mutate(contrast = "temra"))
 
 # how much did forcing change the measurement set?
-meas_long %>% count(contrast, origin)
+meas_long %>% dplyr::count(contrast, origin)
+
 
 # Audit of the forced TFs
 #
@@ -61,19 +60,19 @@ meas_long %>% count(contrast, origin)
 pkn_targets <- unique(pkn$target)
 
 tf_aud <- meas_long %>%
-  filter(origin == "forced_hlh_regulator") %>%
-  mutate(
-    in_pkn = source %in% pkn_nodes,
+  dplyr::filter(origin == "forced_hlh_regulator") %>%
+  dplyr::mutate(
+    in_pkn      = source %in% pkn_nodes,
     has_in_edge = source %in% pkn_targets,
     hlh_targets = vapply(source, function(s)
       paste(sort(trn$target[trn$source == s]), collapse = ", "), character(1))) %>%
-  arrange(contrast, desc(abs(score)))
+  dplyr::arrange(contrast, dplyr::desc(abs(score)))
 
 tf_aud
 
 # how many forced TFs are structurally reachable at all?
-tf_aud %>% 
-  count(contrast, in_pkn, has_in_edge)
+tf_aud %>%
+  dplyr::count(contrast, in_pkn, has_in_edge)
 
 saveRDS(tf_aud, "tf_aud.rds")
 
@@ -88,11 +87,12 @@ saveRDS(tf_aud, "tf_aud.rds")
 # check.names = FALSE: the default would rewrite hyphenated gene symbols
 # (NKX3-1 -> NKX3.1) and silently break the match against the PKN.
 write_meas <- function(tag, variant) {
-  m <- meas_long %>% filter(contrast == tag)
-  if (variant == "baseline") m <- m %>% filter(origin == "top_significant")
+  m <- meas_long %>% dplyr::filter(contrast == tag)
+  if (variant == "baseline")
+    m <- m %>% dplyr::filter(origin == "top_significant")
   
   n_forced_before <- sum(m$origin == "forced_hlh_regulator")
-  m <- m %>% filter(source %in% pkn_nodes)
+  m <- m %>% dplyr::filter(source %in% pkn_nodes)
   n_forced_after  <- sum(m$origin == "forced_hlh_regulator")
   
   tf_v <- setNames(m$score, m$source)

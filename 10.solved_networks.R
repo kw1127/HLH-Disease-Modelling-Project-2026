@@ -25,9 +25,6 @@
 # Requires the solved objects: carnival_sig_*.rds, carnival_anch_*.rds
 # Writes: edges/nodes_{tag}_{view}_{variant}.tsv, network_layers.rds
 # =============================================================================
-
-library(dplyr); library(tibble); library(igraph)
-
 tags     <- c("nk", "temra")                       
 variants <- c("baseline", "anchored")            
 cond_of  <- c(nk = "NK", temra = "CD8 TEMRA")       
@@ -38,14 +35,15 @@ tf_contrast <- readRDS("tf_contrast.rds")   # ULM activity scores, both contrast
 tf_aud      <- readRDS("tf_aud.rds") # the forced HLH regulators
 
 # file naming differs between the two runs
-carn_file <- function(tag, variant)
+carn_file <- function(tag, variant) {
   if (variant == "baseline") sprintf("carnival_sig_%s.rds", tag)
-else                       sprintf("carnival_anch_%s.rds", tag)
+  else                       sprintf("carnival_anch_%s.rds", tag)
+}
 
-meas_file <- function(tag, variant)
+meas_file <- function(tag, variant) {
   if (variant == "baseline") sprintf("meas_%s_baseline.rds", tag)
-else                       sprintf("meas_%s_hlh_anchored.rds", tag)
-
+  else                       sprintf("meas_%s_hlh_anchored.rds", tag)
+}
 
 # Extract the solved network and join the transcriptional layer
 build_layers <- function(tag, variant) {

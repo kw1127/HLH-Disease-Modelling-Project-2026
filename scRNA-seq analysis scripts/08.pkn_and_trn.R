@@ -10,9 +10,6 @@
 #
 # Also records why each HLH gene can or cannot appear in the final model.
 # =============================================================================
-
-library(dplyr); library(tibble); library(igraph); library(OmnipathR)
-
 tags <- c("nk", "temra")   # the two contrasts, used as a suffix throughout
 
 
@@ -90,8 +87,7 @@ sig <- sig_all %>%
 
 nrow(sig)
 
-# no duplicated source-target pair with conflicting signs
-stopifnot(nrow(filter(count(sig, source, target), n > 1)) == 0)
+stopifnot(nrow(dplyr::filter(dplyr::count(sig, source, target), n > 1)) == 0)
 
 pkn <- as.data.frame(sig)
 pkn_nodes <- unique(c(pkn$source, pkn$target))
@@ -162,27 +158,31 @@ all_int %>%
 
 # usable outgoing edges per HLH gene, across all OmniPath layers
 all_int %>%
-  filter(source_genesymbol %in% hlh_chr,
-         is_directed == 1,
-         is_stimulation + is_inhibition == 1) %>%
-  count(source_genesymbol, name = "usable_outgoing") %>%
-  right_join(tibble(source_genesymbol = hlh_chr), by = "source_genesymbol") %>%
-  mutate(usable_outgoing = tidyr::replace_na(usable_outgoing, 0L)) %>%
-  arrange(desc(usable_outgoing))
+  dplyr::filter(source_genesymbol %in% hlh_chr,
+                is_directed == 1,
+                is_stimulation + is_inhibition == 1) %>%
+  dplyr::count(source_genesymbol, name = "usable_outgoing") %>%
+  dplyr::right_join(tibble::tibble(source_genesymbol = hlh_chr),
+                    by = "source_genesymbol") %>%
+  dplyr::mutate(usable_outgoing = tidyr::replace_na(usable_outgoing, 0L)) %>%
+  dplyr::arrange(dplyr::desc(usable_outgoing))
 
 # genes with no regulators in CollecTRI cannot enter at all
-collectri %>% filter(target %in% hlh_chr) %>% count(target)
+collectri %>% 
+  dplyr::filter(target %in% hlh_chr) %>% 
+  dplyr::count(target)
+
 setdiff(hlh_chr, collectri$target)
 
 # PRF1's regulators, and whether they sit in the signalling layer
 trn %>%
-  filter(target == "PRF1") %>%
-  mutate(regulator_in_pkn = source %in% pkn_nodes)
+  dplyr::filter(target == "PRF1") %>%
+  dplyr::mutate(regulator_in_pkn = source %in% pkn_nodes)
 
 # End-to-end reachability stops at the TF, not the gene.
 prf1_tfs <- trn %>%
-  filter(target == "PRF1", source %in% pkn_nodes) %>%
-  pull(source)
+  dplyr::filter(target == "PRF1", source %in% pkn_nodes) %>%
+  dplyr::pull(source)
 
 receptors <- intersect(c("IL12RB1", "IL12RB2", "IFNGR1", "IFNGR2", "IL2RB", "IL18R1"),
                        V(g_sig)$name)
@@ -204,18 +204,20 @@ V(g_sig)$name[shortest_paths(g_sig, from = "IL12RB1", to = "STAT4",
 # filter for the PKN was already applied at the pseudobulk level.
 expressed_in <- function(ct, min_pct = 0.05) {
   cells <- colnames(pbmc.clean)[pbmc.clean$celltype == ct]
-  cnt   <- GetAssayData(pbmc.clean, assay = "RNA", layer = "counts")[, cells]
+  cnt <- GetAssayData(pbmc.clean, assay = "RNA", layer = "counts")[, cells]
   rownames(cnt)[Matrix::rowMeans(cnt > 0) >= min_pct]
 }
 
-genes_nk    <- expressed_in("NK")
+genes_nk <- expressed_in("NK")
 genes_temra <- expressed_in("CD8 TEMRA")
 
 prf1_regs <- trn %>%
-  filter(target == "PRF1") %>%
-  mutate(in_nk = source %in% genes_nk, in_temra = source %in% genes_temra)
+  dplyr::filter(target == "PRF1") %>%
+  dplyr::mutate(in_nk = source %in% genes_nk, in_temra = source %in% genes_temra)
 
 prf1_regs
 
 # regulators detected in NK but not CD8 TEMRA
-prf1_regs %>% filter(in_nk, !in_temra) %>% pull(source)
+prf1_regs %>% 
+  dplyr::filter(in_nk, !in_temra) %>% 
+  dplyr::pull(source)

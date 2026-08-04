@@ -1,126 +1,115 @@
-# ============================================================
-# CARNIVAL measurement objects
+# =============================================================================
+# 14. CARNIVAL measurement input
 #
-# Two sources of measurements:
-#   1. The most confident TFs by activity score (CARNIVAL is an ILP; runtime
-#      scales with the number of measurements, so this is capped).
-#   2. Every CollecTRI regulator of an HLH-associated gene, included by design
-#      regardless of score or FDR. Without these the solver has no reason to
-#      reach the transcriptional layer, and the TRN join would be decorative:
-#      appended after solving rather than constrained during it.
+# Two measurement sets are written, differing only in which TFs they contain.
+# Both are solved over the same PKN, so the difference between the resulting
+# networks isolates what the HLH anchoring contributed.
+#
+#   baseline - the most confident TFs by activity score. CARNIVAL is an ILP
+#                  and runtime scales with the number of measurements, so this
+#                  is capped at the top n by |score| among those clearing FDR.
+#   hlh_anchored - the same TFs plus every CollecTRI regulator of an
+#                  HLH-associated gene, included by design regardless of score
+#                  or FDR. Without these the solver has no reason to reach the
+#                  transcriptional layer, and the TRN join would be decorative:
+#                  appended after solving rather than constrained during it.
 #
 # Forced TFs keep their observed scores. Nothing is inflated to make the solver
 # attend to them; the origin column records which are which so the weakness of
 # each can be reported rather than hidden.
-# ============================================================
+#
+# Requires from section 13: pkn, pkn_nodes, trn, tf_contrast, tags
+# Writes: meas_{nk,temra}_baseline.rds, meas_{nk,temra}_hlh_anchored.rds,
+#         tf_aud.rds
+# =============================================================================
 
+library(dplyr); library(tibble)
+
+
+# Build the measurement objects
 hlh_tfs <- unique(trn$source)   # CollecTRI regulators of the 8 HLH genes
 
 make_measobj <- function(contrast, n_top = 50, force = hlh_tfs) {
-  d <- tf_contrast %>% dplyr::filter(condition == contrast)
+  d <- tf_contrast %>% filter(condition == contrast)
   
   top <- d %>%
-    dplyr::filter(p_adj < 0.05) %>%
-    dplyr::slice_max(abs(score), n = n_top) %>%
-    dplyr::mutate(origin = "top_significant")
+    filter(p_adj < 0.05) %>%
+    slice_max(abs(score), n = n_top) %>%
+    mutate(origin = "top_significant")
   
+  # a TF that is both significant and an HLH regulator appears once, as
+  # top_significant, so the two sets are a union rather than a sum
   forced <- d %>%
-    dplyr::filter(source %in% force, !source %in% top$source) %>%
-    dplyr::mutate(origin = "forced_hlh_regulator")
+    filter(source %in% force, !source %in% top$source) %>%
+    mutate(origin = "forced_hlh_regulator")
   
-  dplyr::bind_rows(top, forced) %>%
-    dplyr::select(source, score, p_adj, origin)
+  bind_rows(top, forced) %>% select(source, score, p_adj, origin)
 }
 
-meas_temra <- make_measobj("CD8 TEMRA")
-meas_nk    <- make_measobj("NK")
+meas_long <- bind_rows(
+  make_measobj("NK") %>% mutate(contrast = "nk"),
+  make_measobj("CD8 TEMRA") %>% mutate(contrast = "temra"))
 
-tf_all <- union(meas_temra$source, meas_nk$source)
+# how much did forcing change the measurement set?
+meas_long %>% count(contrast, origin)
 
-meas_long <- dplyr::bind_rows(
-  meas_nk    %>% dplyr::mutate(contrast = "nk"),
-  meas_temra %>% dplyr::mutate(contrast = "temra")
-)
-
-# How much did forcing change the measurement set?
-meas_long %>% dplyr::count(contrast, origin)
-
-
-# ------------------------------------------------------------
 # Audit of the forced TFs
 #
 # One row per forced TF per contrast. has_in_edge is the critical column: a TF
 # with no incoming edge in the PKN cannot be explained by any solution, so it
-# sits in the measurement set unreachable and will simply be left unset.
-# ------------------------------------------------------------
+# sits in the measurement set unreachable and is simply left unset.
 pkn_targets <- unique(pkn$target)
 
 tf_aud <- meas_long %>%
-  dplyr::filter(origin == "forced_hlh_regulator") %>%
-  dplyr::mutate(
-    in_pkn      = source %in% pkn_nodes,
+  filter(origin == "forced_hlh_regulator") %>%
+  mutate(
+    in_pkn = source %in% pkn_nodes,
     has_in_edge = source %in% pkn_targets,
     hlh_targets = vapply(source, function(s)
-      paste(sort(trn$target[trn$source == s]), collapse = ", "), character(1))
-  ) %>%
-  dplyr::arrange(contrast, dplyr::desc(abs(score)))
+      paste(sort(trn$target[trn$source == s]), collapse = ", "), character(1))) %>%
+  arrange(contrast, desc(abs(score)))
 
 tf_aud
 
-# How many forced TFs are structurally reachable at all?
-tf_aud %>% dplyr::count(contrast, in_pkn, has_in_edge)
+# how many forced TFs are structurally reachable at all?
+tf_aud %>% 
+  count(contrast, in_pkn, has_in_edge)
+
+saveRDS(tf_aud, "tf_aud.rds")
 
 
-# ------------------------------------------------------------
-# CARNIVAL inputs: one shared PKN, per-contrast measurements.
-# Both cell types are solved over identical topology, so any difference between
-# the solved networks reflects the measurements, not the network.
+# Write the CARNIVAL inputs
 #
 # Restricting to pkn_nodes is the expression filter doing its work: the PKN was
 # built on expressed_lax, so a TF not detected in these cell types cannot be
 # asserted to be signalling in them. Forcing overrides the significance bar,
 # not the expression bar.
-# ------------------------------------------------------------
-for (tag in tags) {
-  m <- meas_long %>% dplyr::filter(contrast == tag)
+#
+# check.names = FALSE: the default would rewrite hyphenated gene symbols
+# (NKX3-1 -> NKX3.1) and silently break the match against the PKN.
+write_meas <- function(tag, variant) {
+  m <- meas_long %>% filter(contrast == tag)
+  if (variant == "baseline") m <- m %>% filter(origin == "top_significant")
   
   n_forced_before <- sum(m$origin == "forced_hlh_regulator")
-  m <- m %>% dplyr::filter(source %in% pkn_nodes)
+  m <- m %>% filter(source %in% pkn_nodes)
   n_forced_after  <- sum(m$origin == "forced_hlh_regulator")
   
   tf_v <- setNames(m$score, m$source)
-  
-  # check.names = FALSE: the default would rewrite hyphenated gene symbols
-  # (NKX3-1 -> NKX3.1) and silently break the match against the PKN.
   saveRDS(as.data.frame(as.list(tf_v), check.names = FALSE),
-          sprintf("meas_%s_hlh_anchored.rds", tag))
+          sprintf("meas_%s_%s.rds", tag, variant))
   
-  cat(sprintf("%-6s %d TF measurements, range [%.1f, %.1f]; forced %d -> %d after PKN filter\n",
-              tag, length(tf_v), min(tf_v), max(tf_v),
+  cat(sprintf("%-6s %-13s %2d measurements, range [%.1f, %.1f]; forced %d -> %d after PKN filter\n",
+              tag, variant, length(tf_v), min(tf_v), max(tf_v),
               n_forced_before, n_forced_after))
 }
 
-# Baseline (significance-only) measurements, for the comparison solve.
-# Same PKN, so the difference between the two solved networks isolates what the
-# HLH anchoring added.
-for (tag in tags) {
-  m <- meas_long %>%
-    dplyr::filter(contrast == tag, origin == "top_significant",
-                  source %in% pkn_nodes)
-  
-  tf_v <- setNames(m$score, m$source)
-  saveRDS(as.data.frame(as.list(tf_v), check.names = FALSE),
-          sprintf("meas_%s_baseline.rds", tag))
-  
-  cat(sprintf("%-6s baseline: %d TF measurements\n", tag, length(tf_v)))
-}
-
-saveRDS(tf_aud, "tf_aud.rds")
+for (tag in tags)
+  for (variant in c("baseline", "hlh_anchored"))
+    write_meas(tag, variant)
 
 
-# ------------------------------------------------------------
 # Validation
-# ------------------------------------------------------------
 for (tag in tags) {
   for (variant in c("baseline", "hlh_anchored")) {
     p <- readRDS("pkn_carnival.rds")
@@ -135,17 +124,3 @@ for (tag in tags) {
                 sum(colnames(m) %in% p$target)))
   }
 }
-
-# carn_nodes: node-level output, columns node + activity in {-1, 0, 1}
-reached <- tf_aud %>%
-  dplyr::filter(contrast == "nk") %>%
-  dplyr::left_join(carn_nodes, by = c("source" = "node")) %>%
-  dplyr::mutate(reached = !is.na(activity) & activity != 0)
-
-reached %>% dplyr::count(reached)
-
-# which HLH genes end up with at least one reached regulator
-reached %>%
-  dplyr::filter(reached) %>%
-  tidyr::separate_rows(hlh_targets, sep = ", ") %>%
-  dplyr::distinct(hlh_targets)

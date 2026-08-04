@@ -17,10 +17,6 @@
 # Forced TFs keep their observed scores. Nothing is inflated to make the solver
 # attend to them; the origin column records which are which so the weakness of
 # each can be reported rather than hidden.
-#
-# Requires from section 13: pkn, pkn_nodes, trn, tf_contrast, tags
-# Writes: meas_{nk,temra}_baseline.rds, meas_{nk,temra}_hlh_anchored.rds,
-#         tf_aud.rds
 # =============================================================================
 
 # Build the measurement objects

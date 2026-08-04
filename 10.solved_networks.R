@@ -15,15 +15,10 @@
 # removed.
 #
 # Three nested views are produced per variant:
-#   full     - the whole solved network
+#   full - the whole solved network
 #   anchored - restricted to nodes upstream of the TFs regulating a
 #              differentially expressed HLH gene (supplementary figure)
-#   pruned   - the above, minus nodes rare in the solution pool (main figure)
-#
-# Requires from section 13: trn.rds, hlh_de.rds, tf_contrast.rds
-# Requires from section 14: meas_*.rds, tf_aud.rds
-# Requires the solved objects: carnival_sig_*.rds, carnival_anch_*.rds
-# Writes: edges/nodes_{tag}_{view}_{variant}.tsv, network_layers.rds
+#   pruned - the above, minus nodes rare in the solution pool (main figure)
 # =============================================================================
 tags     <- c("nk", "temra")                       
 variants <- c("baseline", "anchored")            

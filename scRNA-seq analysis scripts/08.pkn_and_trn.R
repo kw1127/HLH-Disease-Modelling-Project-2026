@@ -75,8 +75,8 @@ grid <- do.call(rbind, c(
 grid
 
 # Decision: lax universe, curation_effort >= 3.
-#   The expression filter dominates: strict excludes 9-10 reachable TFs at every
-#   curation level (32 vs 42 at curation effort >=1).
+#   The expression filter dominates: strict excludes 6-8 reachable TFs at every
+#   curation level (32 vs 40 at curation effort >=1).
 #   Within the lax universe, >=3 is the elbow: relaxing to >=2 buys one extra TF
 #   for 2,331 extra edges; tightening to >=4 saves 1,283 edges but costs two TFs.
 

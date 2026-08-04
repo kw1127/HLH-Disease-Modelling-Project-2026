@@ -347,7 +347,7 @@ for (v in variants) {
 
 # What did anchoring change?
 #
-# Same PKN, same solver, same options; the measurement set is the only
+# Same everything, ut the measurement set is the only
 # difference. Nodes present in the anchored solve and absent from the baseline
 # are those the forced HLH regulators recruited.
 for (tag in tags) {

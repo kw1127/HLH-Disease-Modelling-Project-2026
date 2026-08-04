@@ -2,7 +2,7 @@
 # 12. Transcription factor activity (decoupleR + CollecTRI)
 #
 # A TF's own mRNA level is a poor measure of its activity, because activity is
-# controlled by phosphorylation, localisation and cofactors. Instead, activity is
+# controlled by phosphorylation, localisation, and cofactors. Instead, activity is
 # inferred from the behaviour of the genes it regulates.
 # ============================================================
 
@@ -12,7 +12,9 @@
 # splitting them into subunits.
 collectri <- get_collectri(organism = "human", split_complexes = FALSE)
 
-# Activity per cell type
+# Part 1
+#
+# TF Activity of top 40 TFs per cell type by absolute activity score
 # Collapse the pseudobulk samples to one mean profile per cell type.
 # tapply() groups the values of each gene by cell type and averages within group.
 ct <- droplevels(factor(meta_sub[colnames(mat_ct), "celltype"]))
@@ -43,8 +45,7 @@ mat_z <- mat_z[stats::complete.cases(mat_z), ]
 # it does not account for TFs that share target genes, so overlapping regulons
 # can give correlated scores.
 #
-# minsize = 5 excludes TFs with fewer than 5 measured targets, where the slope
-# would be estimated from too little data to trust.
+# minsize = 5 excludes TFs with less than 5 downstream targets.
 tf_acts <- run_ulm(
   mat = mat_z, 
   network = collectri,
@@ -55,7 +56,7 @@ tf_acts <- run_ulm(
   dplyr::filter(statistic == "ulm") %>%
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH"))
 
-# Reshape to a TF x cell type matrix for plotting.
+# Reshape to a TF x cell type matrix for plotting as a heatmap
 tf_mat <- tf_acts %>%
   pivot_wider(id_cols = source, names_from = condition, values_from = score) %>%
   column_to_rownames("source") %>%
@@ -64,13 +65,12 @@ tf_mat <- tf_acts %>%
 # Ranked by largest absolute score, not by significance and not by variance.
 #
 # Not by FDR: with only four conditions, the z-scoring above compresses the
-# t-values, so few tests clear BH correction. Those that do are the TFs with the
-# largest regulons (MYC, SP1, JUN), because a bigger regulon gives a more precise
-# slope, not a more meaningful one.
+# t-values, so only a few tests clear BH correction. Those that do are the TFs with the
+# largest regulons, because a bigger regulon gives a more precise
+# slope. This isn't very meaningful
 #
 # Not by standard deviation: with n = 4, and two of those (CD4 and CD8 naive)
-# being near-identical, an SD over four numbers is unstable and cannot tell
-# "high in one cell type" apart from "splits 2 versus 2".
+# being near-identical, an SD over four numbers is unstable
 tf_ranked <- tf_acts %>%
   group_by(source) %>%
   summarise(max_abs = max(abs(score)), # strongest activity in any cell type
@@ -79,15 +79,14 @@ tf_ranked <- tf_acts %>%
 
 top_tfs <- head(tf_ranked$source, 40)
 
-# Transpose so cell types are rows and TFs are columns.
+# Transpose so cell types are rows and TFs are columns
 top_acts_mat <- t(tf_mat[top_tfs, ])
 
-# Fix the row order naive -> effector, so the gradient reads down the plot
-# instead of being rearranged by clustering.
+# Fix the row order naive -> effector
 row_order <- c("CD4 naive T", "CD8 naive T", "CD8 TEMRA", "NK")
 top_acts_mat <- top_acts_mat[intersect(row_order, rownames(top_acts_mat)), ]
 
-# module annotation
+# Module annotation
 # Assigned from known biology
 modules <- list(
   "Effector / IFN" = c("TBX21","STAT1","IRF1","IRF3","IRF5",
@@ -116,8 +115,7 @@ ann_colors <- list(Function = c(
   "Other" = "grey85"))
 
 # significance stars 
-# Recovers the FDR information dropped by ranking on effect size:
-# the reader can see both magnitude (colour) and significance (star) together.
+# Recovers the FDR information
 star_mat <- tf_acts %>%
   dplyr::filter(source %in% colnames(top_acts_mat)) %>%
   dplyr::mutate(lab = dplyr::case_when(
@@ -130,10 +128,10 @@ star_mat <- tf_acts %>%
   column_to_rownames("condition") %>%
   as.matrix()
 
-# Reorder to exactly match the heatmap, or the stars would land on wrong cells.
+# Reorder to exactly match the heatmap or the stars would land on wrong cells.
 star_mat <- star_mat[rownames(top_acts_mat), colnames(top_acts_mat)]
 
-# heatmap 
+# Heatmap 
 colors.use <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(100)
 lim <- quantile(abs(top_acts_mat), 0.95)
 my_breaks <- c(seq(-lim, 0, length.out = 51),
@@ -168,7 +166,7 @@ pheatmap(
 # TF activity per contrast
 # The heatmap above describes cell types. This describes the two comparisons,
 # which is what the network modelling needs: each column is already a difference
-# from naive, so TFs shared by NK and TEMRA show up in both rather than
+# so TFs shared by NK and TEMRA show up in both rather than
 # cancelling against each other.
 #
 # The two contrasts were filtered independently, so their gene sets differ.
@@ -176,9 +174,9 @@ pheatmap(
 g <- intersect(names(stat_temra), names(stat_nk))
 stat_mat <- cbind("CD8 TEMRA" = stat_temra[g], "NK" = stat_nk[g])
 
-# No centering here. Unlike the expression matrix, these values are already
-# differences relative to naive, so the baseline is built into the contrast.
-# Centering across two columns would remove exactly the signal being measured.
+# No centering here. Unlike the expression matrix used for the heatmap, these values are already
+# differences, so the baseline is built into the contrast.
+# Centering across two columns would remove the signal being measured.
 tf_contrast <- run_ulm(
   mat = stat_mat,
   network = collectri,
@@ -191,7 +189,7 @@ tf_contrast <- run_ulm(
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
   dplyr::ungroup()
 
-# Gene set enrichment analysis
+# Gene set enrichment analysis (GSEA)
 net_homo <- msigdbr(species = "Homo sapiens", collection = "C5", subcollection = "GO:BP") |>
   dplyr::select(source = gs_name, target = gene_symbol) |>
   dplyr::distinct() |>
@@ -215,11 +213,11 @@ gsea_contrast <- decoupleR::run_fgsea(
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) |>
   dplyr::ungroup()
 
-# --- NEW: flag GO terms whose signal is driven by ribosomal protein genes ------
+# Flag GO terms whose signal is driven predominantly by ribosomal protein genes 
 # Several GO:BP terms (myoblast fusion, syncytium formation, muscle contraction)
 # carry ~45 RPL genes as erroneous members. In this contrast their entire leading
-# edge is ribosomal, so they report the translational program under a muscle label.
-# Identify them from the leading edge, which is what actually generates the NES.
+# edge is ribosomal, so they report the translational program under an incorrect muscle label.
+# Identify them from the leading edge which generates the NES.
 # Correctly-annotated translation terms to retain as the representative finding
 keep_translation <- c("GOBP_CYTOPLASMIC_TRANSLATION",
                       "GOBP_RIBOSOME_BIOGENESIS",
@@ -232,9 +230,9 @@ ribo_drop <- function(col) {
   f <- fgsea::fgsea(pathways, stat_mat[, col],
                     minSize = 15, maxSize = 500, eps = 0)
   f[, .(pathway,
-        n_le    = lengths(leadingEdge),
+        n_le = lengths(leadingEdge),
         ribo_le = sapply(leadingEdge, \(g) mean(grepl(ribo_re, g))))
-  ][ribo_le > 0.5 & n_le >= 10, pathway]   # n_le floor ignores 1-gene edges
+  ][ribo_le > 0.5 & n_le >= 10, pathway] # n_le floor ignores 1-gene edges
 }
 
 drop <- unique(unlist(lapply(colnames(stat_mat), ribo_drop)))
@@ -273,7 +271,7 @@ gsea_barplot <- gsea_plotting |>
 
 ggsave("diverging_barplot.png", gsea_barplot, width = 10, height = 8, dpi = 300, bg = "white")
 
-# Figure: Scatter plot of TF activities
+# Scatter plot of TF activities
 tf_wide <- tf_contrast %>%
   mutate(cond = recode(condition, "CD8 TEMRA" = "temra", "NK" = "nk")) %>%
   select(source, cond, score, p_adj) %>%
@@ -319,7 +317,7 @@ tf_scatter <- ggplot(tf_wide, aes(score_nk, score_temra)) +
 
 ggsave("tf_scatter.png", tf_scatter, width = 10, height = 10, dpi = 300, bg = "white")
 
-# Figure: Dumbbell of shared TFs
+# Dumbbell plot of shared TFs
 shared_tfs <- tf_wide %>%
   filter(class == "Shared") %>%
   mutate(source = reorder(source, delta))
@@ -344,7 +342,7 @@ tf_dumbbell <- ggplot(shared_tfs) +
 
 ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
 
-# Figure: which TFs regulate primary HLH-associated genes?
+# Which TFs regulate primary HLH-associated genes?
 # Shared: Wald statistics for the HLH genes
 hlh_obs_wide <- tibble(
   gene = hlh_chr,

@@ -318,36 +318,13 @@ tf_scatter <- ggplot(tf_wide, aes(score_nk, score_temra)) +
 
 ggsave("tf_scatter.png", tf_scatter, width = 10, height = 10, dpi = 300, bg = "white")
 
-# Dumbbell plot of shared TFs
-shared_tfs <- tf_wide %>%
-  filter(class == "Shared") %>%
-  mutate(source = reorder(source, delta))
-
-lim_shared <- max(abs(c(shared_tfs$score_nk, shared_tfs$score_temra))) * 1.08
-
-tf_dumbbell <- ggplot(shared_tfs) +
-  geom_vline(xintercept = 0, linewidth = 0.4, colour = "grey40") +
-  geom_segment(aes(x = score_nk, xend = score_temra, y = source, yend = source),
-               colour = "grey65", linewidth = 0.7) +
-  geom_point(aes(score_nk, source, colour = "NK"), size = 2.6, alpha = 0.75) +
-  geom_point(aes(score_temra, source, colour = "CD8 TEMRA"), size = 2.6, alpha = 0.75) +
-  scale_colour_manual(values = c("NK" = "#2166AC", "CD8 TEMRA" = "#B2182B"),
-                      breaks = c("NK", "CD8 TEMRA"), name = NULL) +
-  scale_x_continuous(limits = c(-lim_shared, lim_shared)) +
-  labs(x = "TF activity score", y = NULL) +
-  theme_bw(base_size = 11) +
-  theme(panel.grid.major.y = element_line(linewidth = 0.2, colour = "grey92"),
-        panel.grid.minor = element_blank(),
-        axis.text.y = element_text(size = 8),
-        legend.position = "bottom")
-
-ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
-
 # Shared: Wald statistics for the HLH genes
 hlh_obs_wide <- tibble(
   gene = hlh_chr,
   nk = as.numeric(stat_nk[hlh_chr]),
-  temra = as.numeric(stat_temra[hlh_chr])) %>%
+  temra = as.numeric(stat_temra[hlh_chr]),
+  nk_padj = res_nk[hlh_chr, "padj"],
+  temra_padj = res_temra[hlh_chr, "padj"]) %>%
   mutate(delta = temra - nk)
 
 hlh_obs_long <- hlh_obs_wide %>%
@@ -361,8 +338,13 @@ p_hlh_obs <- hlh_obs_wide %>%
   geom_vline(xintercept = 0, linewidth = 0.4, colour = "grey40") +
   geom_segment(aes(x = nk, xend = temra, y = gene, yend = gene),
                colour = "grey65", linewidth = 0.7) +
-  geom_point(aes(nk, gene, colour = "NK"), size = 3, alpha = 0.75) +
-  geom_point(aes(temra, gene, colour = "CD8 TEMRA"), size = 3, alpha = 0.75) +
+  geom_point(aes(nk, gene, colour = "NK", shape = nk_padj < 0.05),
+             size = 3, alpha = 0.75, stroke = 0.9) +
+  geom_point(aes(temra, gene, colour = "CD8 TEMRA", shape = temra_padj < 0.05),
+             size = 3, alpha = 0.75, stroke = 0.9) +
+  scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 21),
+                     labels = c(`TRUE` = "padj < 0.05", `FALSE` = "n.s."),
+                     name = NULL) +
   scale_colour_manual(values = c("NK" = "#2166AC", "CD8 TEMRA" = "#B2182B"),
                       breaks = c("NK", "CD8 TEMRA"), name = NULL) +
   labs(x = "Wald statistic", y = NULL) +

@@ -201,6 +201,7 @@ print(top_markers, n = Inf)
 # plot stays legible and small clusters are not visually swamped by large ones.
 top_markers_heatmap <- DoHeatmap(subset(pbmc, downsample = 100),
                                  features = top_markers$gene,
+                                 group.by = "seurat_clusters",
                                  size = 2.5, angle = 0, hjust = 0.5) +
   theme(axis.text.y = element_text(size = 7)) +
   NoLegend()

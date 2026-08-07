@@ -138,28 +138,29 @@ my_breaks <- c(seq(-lim, 0, length.out = 51),
                seq(lim / 50, lim, length.out = 50))
 
 pheatmap(
-  mat = top_acts_mat,
+  mat = t(top_acts_mat),
   color = colors.use,
   breaks = my_breaks,
   border_color = "white",
-  cellwidth = 15, 
-  cellheight = 15,
-  cluster_rows = FALSE,         
-  gaps_row = 2,                  
-  cutree_cols = 3,             
-  treeheight_col = 25,
-  angle_col = 90,
-  annotation_col = ann_col,
+  cellwidth = 32,
+  cellheight = 9,
+  cluster_cols = FALSE,
+  gaps_col = 2,
+  cutree_rows = 3,
+  treeheight_row = 30,
+  angle_col = 45,
+  annotation_row = ann_col,
   annotation_colors = ann_colors,
-  display_numbers = star_mat,
+  annotation_names_row = FALSE,
+  display_numbers = t(star_mat),
   number_color = "black",
   fontsize_number = 7,
-  fontsize_row = 11,
-  fontsize_col = 8,
-  main = "TF activity: cytotoxic effectors vs naive T",
-  filename = "28_tf_acts_lymphoid.pdf",
-  width = ncol(top_acts_mat) * 15/72 + 5,
-  height = nrow(top_acts_mat) * 15/72 + 3.5)
+  fontsize_row = 7,
+  fontsize_col = 11,
+  filename = "tf_acts_lymphoid.png",
+  res = 600,
+  width  = 4*32/72 + 30/72 + 0.7 + 2.3 + 0.2,
+  height = 40*9/72 + 1.3)
 
 # Part two
 #
@@ -341,7 +342,6 @@ tf_dumbbell <- ggplot(shared_tfs) +
         legend.position = "bottom")
 
 ggsave("tf_dumbbell.png", tf_dumbbell, width = 7, height = 9, dpi = 300, bg = "white")
-
 
 # Shared: Wald statistics for the HLH genes
 hlh_obs_wide <- tibble(

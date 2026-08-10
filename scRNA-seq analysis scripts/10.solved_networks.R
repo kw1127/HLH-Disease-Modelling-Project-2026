@@ -325,11 +325,11 @@ cons_df <- do.call(rbind, lapply(variants, function(v)
 
 cons_df <- cons_df %>%
   mutate(panel = factor(paste0(ifelse(variant == "baseline",
-                                      "Unanchored", "HLH-anchored"),
+                                      "Unanchored", "Anchored"),
                                " - ", contrast),
-                        levels = c("Unanchored - NK", "HLH-anchored - NK",
+                        levels = c("Unanchored - NK", "Anchored - NK",
                                    "Unanchored - CD8 TEMRA",
-                                   "HLH-anchored - CD8 TEMRA")),
+                                   "Anchored - CD8 TEMRA")),
          layer = factor(layer, levels = c("perturbation", "signalling", "TF")))
 
 # nodes ranked within each network, so the shape of the drop-off is visible

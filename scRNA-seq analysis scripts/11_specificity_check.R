@@ -172,12 +172,30 @@ pA1 <- enrich %>%
                                "CD8 TEMRA" = "#B2182B"), guide = "none") +
   scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
   labs(x = NULL,
-       y = "Enrichment of HLH-gene regulators\namong active TFs (fold)") +
+       y = "Enrichment of pHLH gene regulators\namong active TFs (fold)") +
   theme_bw(base_size = 11) +
   theme(panel.grid.major.x = element_blank(),
         axis.text.x = element_text(angle = 20, hjust = 1))
 
 # proportion rather than count, so genes with large regulons do not dominate
+# which HLH genes each regulator targets
+tf_targets <- trn %>%
+  dplyr::group_by(source) %>%
+  dplyr::summarise(targets = paste(sort(unique(target)), collapse = ", "),
+                   .groups = "drop")
+
+by_gene <- trn %>%
+  dplyr::inner_join(tf_all_ct, by = "source") %>%
+  dplyr::group_by(condition, target) %>%
+  dplyr::summarise(n_reg      = dplyr::n(),
+                   n_sig      = sum(p_adj < 0.05),
+                   median_abs = round(median(abs(score)), 2),
+                   .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = condition,
+                     values_from = c(n_sig, median_abs))
+
+by_gene
+
 pA2 <- by_gene %>%
   select(target, n_reg, starts_with("n_sig_")) %>%
   pivot_longer(starts_with("n_sig_"),
@@ -199,20 +217,3 @@ figA <- pA1 + pA2 + plot_annotation(tag_levels = "A")
 ggsave("Figure_specificity.png", figA, width = 11, height = 4.5,
        dpi = 300, bg = "white")
 
-# which HLH genes each regulator targets
-tf_targets <- trn %>%
-  dplyr::group_by(source) %>%
-  dplyr::summarise(targets = paste(sort(unique(target)), collapse = ", "),
-                   .groups = "drop")
-
-by_gene <- trn %>%
-  dplyr::inner_join(tf_all_ct, by = "source") %>%
-  dplyr::group_by(condition, target) %>%
-  dplyr::summarise(n_reg      = dplyr::n(),
-                   n_sig      = sum(p_adj < 0.05),
-                   median_abs = round(median(abs(score)), 2),
-                   .groups = "drop") %>%
-  tidyr::pivot_wider(names_from = condition,
-                     values_from = c(n_sig, median_abs))
-
-by_gene

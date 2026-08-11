@@ -260,97 +260,74 @@ print(tapply(counts(dds_ct)["STX11", ], meta_sub$celltype, \(x) sum(x >= 5)))
 # plot is the right way round: cytotoxic genes on the effector side, naive
 # markers (CCR7, SELL, TCF7) on the other.
 anchors <- c("GNLY", "NKG7", "GZMB", "CCL5", "CD3D", "CCR7", "SELL", "TCF7")
+hlh_chr <- c("PRF1", "UNC13D", "STX11", "STXBP2",
+             "RAB27A", "LYST", "SH2D1A", "XIAP")
 
-# y-axis ceiling; prevents small p-values from dominating the plot
-cap <- 150 
+cap <- 150   # y-axis ceiling; capped points drawn as triangles
+lfc_lim <- 8    # shared x range, so effect sizes are comparable across panels
 
-# x axis is the ashr-shrunken log2FoldChange while y axis is the unshrunken Wald p.adj.
-# Shrinkage improves effect-size estimates.
-#
-# Volcano 1: CD8 TEMRA vs CD8 naive T
-df_temra <- as.data.frame(res_temra) |>
-  rownames_to_column("gene") |>
-  filter(!is.na(padj)) |> # DESeq2 sets padj to NA for filtered genes
-  mutate(
-    y = pmin(-log10(padj), cap),
-    capped = -log10(padj) > cap,
-    sig = case_when(padj < 0.05 & log2FoldChange > 1 ~ "Up in effector",
-                    padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
-                    TRUE ~ "n.s."))
+volcano_panel <- function(res, title) {
+  
+  df <- as.data.frame(res) |>
+    rownames_to_column("gene") |>
+    filter(!is.na(padj)) |>          # DESeq2 sets padj to NA for filtered genes
+    mutate(
+      y = pmin(-log10(padj), cap),
+      capped = -log10(padj) > cap,
+      sig = case_when(
+        padj < 0.05 & log2FoldChange > 1 ~ "Up in effector",
+        padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
+        TRUE ~ "n.s."))
+  
+  lab <- df |>
+    dplyr::filter(gene %in% c(anchors, hlh_chr)) |>
+    dplyr::mutate(is_hlh = gene %in% hlh_chr,
+                  col = ifelse(is_hlh, "#1B7837", "grey25"),
+                  face = ifelse(is_hlh, "bold", "italic"),
+                  sz = ifelse(is_hlh, 3.5, 3))
+  
+  ggplot(df, aes(log2FoldChange, y)) +
+    geom_point(aes(colour = sig, shape = capped), size = 0.7, alpha = 0.4) +
+    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 17), guide = "none") +
+    scale_colour_manual(values = c("Up in effector" = "#C0504D",
+                                   "Up in naive" = "#4F81BD",
+                                   "n.s." = "grey80"), name = NULL) +
+    geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
+    geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
+    geom_point(data = filter(df, gene %in% hlh_chr),
+               colour = "#1B7837", size = 2.5, shape = 18) +
+    geom_text_repel(data = lab, aes(label = gene),
+                    colour = lab$col, fontface = lab$face, size = lab$sz,
+                    max.overlaps = Inf, seed = 42,
+                    ylim = c(NA, cap * 0.9), nudge_y = -8, box.padding = 0.5,
+                    segment.colour = lab$col, segment.size = 0.3) +
+    coord_cartesian(xlim = c(-lfc_lim, lfc_lim)) +
+    scale_x_continuous(breaks = seq(-lfc_lim, lfc_lim, 4)) +
+    labs(x = "log2 fold change", y = "-log10 (padj)", title = title) +
+    theme_bw() +
+    theme(plot.title = element_text(size = 12))
+}
 
-p_temra <- ggplot(df_temra, aes(log2FoldChange, y)) +
-  geom_point(aes(colour = sig, shape = capped), size = 0.7, alpha = 0.4) +
-  scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 17), guide = "none") +
-  scale_colour_manual(values = c("Up in effector" = "#C0504D",
-                                 "Up in naive" = "#4F81BD",
-                                 "n.s." = "grey80"), name = NULL) +
-  geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
-  geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
-  geom_text_repel(data = filter(df_temra, gene %in% anchors), # anchor markers, for orientation
-                  aes(label = gene), size = 3, colour = "grey25",
-                  fontface = "italic", max.overlaps = Inf, seed = 42,
-                  ylim = c(NA, cap * 0.9), nudge_y = -8,
-                  box.padding = 0.5,
-                  segment.colour = "grey60", segment.size = 0.3) +
-  geom_point(data = filter(df_temra, gene %in% hlh_chr), # HLH genes, the subject
-             colour = "#1B7837", size = 2.5, shape = 18) +
-  geom_text_repel(data = filter(df_temra, gene %in% hlh_chr),
-                  aes(label = gene), size = 3.5, colour = "#1B7837",
-                  fontface = "bold", max.overlaps = Inf, seed = 42,
-                  ylim = c(NA, cap * 0.8), nudge_y = -8,
-                  box.padding = 0.5,
-                  segment.colour = "#1B7837", segment.size = 0.3) +
-  labs(x = "log2 fold change", y = "-log10 (padj)",
-       title = "CD8 TEMRA vs CD8 naive T",
-       caption = sprintf("y-axis capped at %g; capped points shown as triangles", cap)) +
-  theme_bw()
+# assemble the plot
+x_obs <- range(c(res_temra$log2FoldChange, res_nk$log2FoldChange), na.rm = TRUE)
+if (x_obs[1] < -lfc_lim || x_obs[2] > lfc_lim)
+  warning(sprintf("observed LFC range [%.1f, %.1f] exceeds the plotted [-%g, %g]",
+                  x_obs[1], x_obs[2], lfc_lim, lfc_lim))
 
-ggsave("26_volcano_temra.png", p_temra, width = 9, height = 7, dpi = 300)
+fig_volcanoes <-
+  (volcano_panel(res_temra, "CD8 TEMRA vs CD8 naive T") /
+     volcano_panel(res_nk,    "NK vs pooled naive")) +
+  plot_layout(guides = "collect", axis_titles = "collect_x") +
+  plot_annotation(tag_levels = "A") &
+  theme(legend.position = "bottom")
 
-# Volcano 2: NK vs pooled naive
-df_nk <- as.data.frame(res_nk) |>
-  rownames_to_column("gene") |>
-  filter(!is.na(padj)) |>
-  mutate(
-    y = pmin(-log10(padj), cap),
-    capped = -log10(padj) > cap,
-    sig = case_when(padj < 0.05 & log2FoldChange >  1 ~ "Up in effector",
-                    padj < 0.05 & log2FoldChange < -1 ~ "Up in naive",
-                    TRUE ~ "n.s."))
-
-p_nk <- ggplot(df_nk, aes(log2FoldChange, y)) +
-  geom_point(aes(colour = sig, shape = capped), size = 0.7, alpha = 0.4) +
-  scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 17), guide = "none") +
-  scale_colour_manual(values = c("Up in effector" = "#C0504D",
-                                 "Up in naive" = "#4F81BD",
-                                 "n.s." = "grey80"), name = NULL) +
-  geom_vline(xintercept = c(-1, 1), lty = 2, colour = "grey60") +
-  geom_hline(yintercept = -log10(0.05), lty = 2, colour = "grey60") +
-  geom_text_repel(data = filter(df_nk, gene %in% anchors),
-                  aes(label = gene), size = 3, colour = "grey25",
-                  fontface = "italic", max.overlaps = Inf, seed = 42,
-                  ylim = c(NA, cap * 0.9), nudge_y = -8,
-                  box.padding = 0.5,
-                  segment.colour = "grey60", segment.size = 0.3) +
-  geom_point(data = filter(df_nk, gene %in% hlh_chr),
-             colour = "#1B7837", size = 2.5, shape = 18) +
-  geom_text_repel(data = filter(df_nk, gene %in% hlh_chr),
-                  aes(label = gene), size = 3.5, colour = "#1B7837",
-                  fontface = "bold", max.overlaps = Inf, seed = 42,
-                  ylim = c(NA, cap * 0.8), nudge_y = -8,
-                  box.padding = 0.5,
-                  segment.colour = "#1B7837", segment.size = 0.3) +
-  labs(x = "log2 fold change", y = "-log10 (padj)",
-       title = "NK vs pooled naive (CD4 + CD8 naive T)",
-       caption = sprintf("y-axis capped at %g; capped points shown as triangles", cap)) +
-  theme_bw()
-
-ggsave("27_volcano_nk.png", p_nk, width = 9, height = 7, dpi = 300)
+ggsave("Figure_06_volcanoes.png", fig_volcanoes,
+       width = 6.5, height = 8.5, dpi = 300, bg = "white")
 
 saveRDS(stat_temra, "stat_temra.rds")
 saveRDS(stat_nk, "stat_nk.rds")
 
-# Main figure 5: HLH expression landscape and pseudobulk PCA
+# HLH expression landscape and pseudobulk PCA
 dot_hlh_panel <- dot_hlh +
   labs(tag = "A", x = NULL) +
   theme(legend.position = "right", legend.box = "horizontal") 
@@ -370,37 +347,6 @@ fig_hlh_pca <- dot_hlh_panel + pca_panel +
 ggsave("Figure_05_hlh_pca.png", fig_hlh_pca,
        width = 10, height = 10, dpi = 300, bg = "white")
 
-# Main figure 6: differential expression
-# Both panels share an x range so effect sizes are visually comparable.
-shared_x <- list(
-  coord_cartesian(xlim = c(-8, 8)),
-  scale_x_continuous(breaks = seq(-8, 8, 4))
-)
-
-x_obs <- range(c(res_temra$log2FoldChange, res_nk$log2FoldChange), na.rm = TRUE)
-if (x_obs[1] < -8 || x_obs[2] > 8)
-  warning(sprintf("observed LFC range [%.1f, %.1f] exceeds the plotted [-8, 8]",
-                  x_obs[1], x_obs[2]))
-
-volcano_temra_panel <- p_temra +
-  shared_x +
-  labs(caption = NULL, title = "CD8 TEMRA vs CD8 naive T") +
-  theme(plot.title = element_text(size = 12)) 
-
-volcano_nk_panel <- p_nk +
-  shared_x +
-  labs(caption = NULL, title = "NK vs pooled naive") +
-  theme(plot.title = element_text(size = 12)) 
-
-fig_volcanoes <- (volcano_temra_panel / volcano_nk_panel) +
-  plot_layout(guides = "collect", axis_titles = "collect_x") +
-  plot_annotation(
-    tag_levels = "A") &
-  theme(legend.position = "bottom")
-
-ggsave("Figure_06_volcanoes.png", fig_volcanoes,
-       width = 6.5, height = 8.5, dpi = 300, bg = "white")
-
 # Supplementary: model diagnostics, stacked so each gets the full width.
 fig_supp <- dispersion_plot / s_s_heatmap +
   plot_layout(heights = c(1, 1.4)) +
@@ -411,7 +357,7 @@ ggsave("Supp_Figure_05_deseq_qc.png", fig_supp,
        width = 8, height = 12, dpi = 300, bg = "white")
 
 
-# Additional checks for the thesis
+# Additional sanity checks for the thesis
 #
 # 1. Is pooling CD4 and CD8 naive T a good idea?
 # Counted at the same thresholds used for the effector contrasts, so the three

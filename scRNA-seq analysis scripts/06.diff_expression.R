@@ -31,9 +31,10 @@ hlh <- c(
 hlh <- factor(hlh, levels = hlh)
 hlh_chr <- as.character(hlh)
 
-# Colour is the mean log-normalised expression z-scored across cell types, so it
-# shows relative rank rather than absolute level. Size is the percent of single
-# cells with non-zero counts, which is sensitive to capture depth.
+# Colour: per gene, the population means are
+# z-scored across the 12 populations. It encodes each gene's
+# relative rank across populations. 
+# Size is the percent of cells with non-zero counts, which is sensitive to capture depth.
 dot_hlh <- DotPlot(pbmc.clean, features = levels(hlh)) +
   RotatedAxis() +
   labs(title = NULL,

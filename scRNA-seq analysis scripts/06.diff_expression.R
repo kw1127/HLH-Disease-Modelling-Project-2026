@@ -260,8 +260,6 @@ print(tapply(counts(dds_ct)["STX11", ], meta_sub$celltype, \(x) sum(x >= 5)))
 # plot is the right way round: cytotoxic genes on the effector side, naive
 # markers (CCR7, SELL, TCF7) on the other.
 anchors <- c("GNLY", "NKG7", "GZMB", "CCL5", "CD3D", "CCR7", "SELL", "TCF7")
-hlh_chr <- c("PRF1", "UNC13D", "STX11", "STXBP2",
-             "RAB27A", "LYST", "SH2D1A", "XIAP")
 
 cap <- 150   # y-axis ceiling; capped points drawn as triangles
 lfc_lim <- 8    # shared x range, so effect sizes are comparable across panels

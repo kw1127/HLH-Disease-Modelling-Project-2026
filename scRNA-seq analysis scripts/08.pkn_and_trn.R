@@ -74,6 +74,23 @@ grid <- do.call(rbind, c(
 
 grid
 
+# Export as image for thesis
+grid_df <- as.data.frame(grid, stringsAsFactors = FALSE)
+
+# if rbind produced a character matrix, restore the numeric columns
+grid_df <- type.convert(grid_df, as.is = TRUE)
+
+# rownames from rbind aren't a column; make them one if they carry information
+grid_df <- tibble::rownames_to_column(grid_df, "row")   # skip if rownames are 1..8
+
+grid_tbl <- grid_df |>
+  gt(groupname_col = "label") |>        
+  fmt_number(columns = where(is.numeric), decimals = 3) |>
+  cols_align(align = "center", columns = everything()) |>
+  tab_options(table.font.size = 11, data_row.padding = px(4))
+
+gtsave(grid_tbl, "table_grid.png", vwidth = 700, expand = 5)
+
 # Decision: lax universe, curation_effort >= 3.
 #   The expression filter dominates: strict excludes 6-8 reachable TFs at every
 #   curation level (32 vs 40 at curation effort >=1).
@@ -241,3 +258,16 @@ prf1_regs
 prf1_regs %>% 
   dplyr::filter(in_nk, !in_temra) %>% 
   dplyr::pull(source)
+
+# shared vs specific, both layers — these are your own helpers
+sig_of <- function(x) x$nodes$id[x$nodes$layer %in% c("signalling","perturbation")]
+list(shared = intersect(sig_of(pruned$anchored$nk), sig_of(pruned$anchored$temra)),
+     nk_only = setdiff(sig_of(pruned$anchored$nk), sig_of(pruned$anchored$temra)),
+     temra_only = setdiff(sig_of(pruned$anchored$temra), sig_of(pruned$anchored$nk)))
+
+# TF -> pHLH edges
+trn_of <- function(x) unique(paste(x$edges$source[x$edges$layer=="trn"],
+                                   x$edges$target[x$edges$layer=="trn"], sep=" -> "))
+list(shared = intersect(trn_of(pruned$anchored$nk), trn_of(pruned$anchored$temra)),
+     nk_only = setdiff(trn_of(pruned$anchored$nk), trn_of(pruned$anchored$temra)),
+     temra_only = setdiff(trn_of(pruned$anchored$temra), trn_of(pruned$anchored$nk)))

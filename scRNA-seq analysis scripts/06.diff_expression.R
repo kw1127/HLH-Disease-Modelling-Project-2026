@@ -393,5 +393,4 @@ cat(sprintf("TEMRA Wald stat correlation, CD8-only vs pooled reference: %.3f\n",
             cor(stat_temra[g_shared], stat_temra_pooled[g_shared])))
 
 # 0,985 correlation between CD8-only and pooled naive reference
-
 saveRDS(stat_temra_pooled, "stat_temra_pooled.rds")

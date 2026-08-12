@@ -306,8 +306,8 @@ tf_scatter <- ggplot(tf_wide, aes(score_nk, score_temra)) +
   geom_text_repel(data = label_contrast, aes(label = source), size = 3,
                   max.overlaps = Inf, box.padding = 0.35, segment.colour = "grey60") +
   scale_colour_manual(values = c(
-    "Shared" = "#B2182B", "NK only" = "#2166AC",
-    "TEMRA only" = "#4DAF4A", "Opposite" = "#984EA3", "n.s." = "grey80"),
+    "Shared" = "#8DA0CB", "NK only" = "#FC8D62",
+    "TEMRA only" = "#66C2A5", "n.s." = "grey80"),
     drop = TRUE) +
   coord_equal(xlim = c(-lim_contrast, lim_contrast), ylim = c(-lim_contrast, lim_contrast)) +
   labs(x = "NK vs naive T",
@@ -318,7 +318,7 @@ tf_scatter <- ggplot(tf_wide, aes(score_nk, score_temra)) +
 
 ggsave("tf_scatter.png", tf_scatter, width = 10, height = 10, dpi = 300, bg = "white")
 
-# Shared: Wald statistics for the HLH genes
+# Shared: Wald statistics for the HLH gene
 hlh_obs_wide <- tibble(
   gene = hlh_chr,
   nk = as.numeric(stat_nk[hlh_chr]),

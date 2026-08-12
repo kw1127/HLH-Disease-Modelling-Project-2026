@@ -324,12 +324,8 @@ cons_df <- do.call(rbind, lapply(variants, function(v)
              contrast = cond_of[[tag]])))))
 
 cons_df <- cons_df %>%
-  mutate(panel = factor(paste0(ifelse(variant == "baseline",
-                                      "Unanchored", "Anchored"),
-                               " - ", contrast),
-                        levels = c("Unanchored - NK", "Anchored - NK",
-                                   "Unanchored - CD8 TEMRA",
-                                   "Anchored - CD8 TEMRA")),
+  filter(variant != "baseline") %>%
+  mutate(panel = factor(contrast, levels = c("NK", "CD8 TEMRA")),
          layer = factor(layer, levels = c("perturbation", "signalling", "TF")))
 
 # nodes ranked within each network, so the shape of the drop-off is visible
@@ -342,7 +338,7 @@ cons_df <- cons_df %>%
 node_consistency <- ggplot(cons_df, aes(rank, consistency, colour = layer)) +
   geom_hline(yintercept = MIN_CONS, linetype = "dashed", colour = "grey40") +
   geom_point(size = 1.4, alpha = 0.85) +
-  facet_wrap(~ panel, nrow = 2, scales = "free_x") +
+  facet_wrap(~ panel, nrow = 1, scales = "free_x") +
   scale_colour_manual(values = c(perturbation = "#E8A33D",
                                  signalling = "#4F81BD",
                                  TF = "#B2182B"),
@@ -357,7 +353,7 @@ node_consistency <- ggplot(cons_df, aes(rank, consistency, colour = layer)) +
         legend.position = "bottom",
         strip.background = element_rect(fill = "grey95"))
 
-ggsave("Figure_pool_consistency.png", node_consistency, width = 9, height = 6,
+ggsave("Figure_pool_consistency.png", node_consistency, width = 9, height = 3.6,
        dpi = 300, bg = "white")
 
 # How many nodes sit at 100%?
@@ -452,3 +448,42 @@ for (tag in tags) {
   cat("TF -> HLH edges: anchored ", sum(net$anchored[[tag]]$edges$layer == "trn"),
       ", baseline ",               sum(net$baseline[[tag]]$edges$layer == "trn"), "\n", sep = "")
 }
+
+# Cell-type-specific regulation of PRF1
+#
+# Which regulators differ between cell types, not to build the
+# networks that get solved. min_pct is a marker-gene threshold; with scRNA-seq
+# dropout it is far too strict to use as a presence filter, and the expression
+# filter for the PKN was already applied at the pseudobulk level.
+expressed_in <- function(ct, min_pct = 0.05) {
+  cells <- colnames(pbmc.clean)[pbmc.clean$celltype == ct]
+  cnt <- GetAssayData(pbmc.clean, assay = "RNA", layer = "counts")[, cells]
+  rownames(cnt)[Matrix::rowMeans(cnt > 0) >= min_pct]
+}
+
+genes_nk <- expressed_in("NK")
+genes_temra <- expressed_in("CD8 TEMRA")
+
+prf1_regs <- trn %>%
+  dplyr::filter(target == "PRF1") %>%
+  dplyr::mutate(in_nk = source %in% genes_nk, in_temra = source %in% genes_temra)
+
+prf1_regs
+
+# regulators detected in NK but not CD8 TEMRA
+prf1_regs %>% 
+  dplyr::filter(in_nk, !in_temra) %>% 
+  dplyr::pull(source)
+
+# shared vs specific, both layers — these are your own helpers
+sig_of <- function(x) x$nodes$id[x$nodes$layer %in% c("signalling","perturbation")]
+list(shared = intersect(sig_of(pruned$anchored$nk), sig_of(pruned$anchored$temra)),
+     nk_only = setdiff(sig_of(pruned$anchored$nk), sig_of(pruned$anchored$temra)),
+     temra_only = setdiff(sig_of(pruned$anchored$temra), sig_of(pruned$anchored$nk)))
+
+# TF -> pHLH edges
+trn_of <- function(x) unique(paste(x$edges$source[x$edges$layer=="trn"],
+                                   x$edges$target[x$edges$layer=="trn"], sep=" -> "))
+list(shared = intersect(trn_of(pruned$anchored$nk), trn_of(pruned$anchored$temra)),
+     nk_only = setdiff(trn_of(pruned$anchored$nk), trn_of(pruned$anchored$temra)),
+     temra_only = setdiff(trn_of(pruned$anchored$temra), trn_of(pruned$anchored$nk)))

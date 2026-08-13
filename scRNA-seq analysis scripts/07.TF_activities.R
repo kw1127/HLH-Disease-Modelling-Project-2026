@@ -247,6 +247,114 @@ drop2 <- c("GOBP_NEUROINFLAMMATORY_RESPONSE",
            "GOBP_RRNA_METABOLIC_PROCESS",
            "GOBP_PROTEIN_RNA_COMPLEX_ORGANIZATION")
 
+# GSEA visualisation
+# Create GO ID lookup
+go_ids <- msigdbr(species = "Homo sapiens",
+                  collection = "C5", subcollection = "GO:BP") |>
+  dplyr::distinct(source = gs_name, go_id = gs_exact_source)
+
+gsea_go <- gsea_contrast |>
+  dplyr::filter(!source %in% c(drop, drop2)) |>
+  dplyr::left_join(go_ids, by = "source") |>
+  dplyr::filter(p_adj < 0.05, !is.na(go_id))
+
+# Terms enriched in NK cells
+nk_up <- dplyr::filter(gsea_go, condition == "NK", score > 0)
+
+sim_nk_up <- calculateSimMatrix(nk_up$go_id,
+                                orgdb = "org.Hs.eg.db",
+                                ont = "BP",
+                                method = "Rel")
+
+scores_nk_up <- setNames(-log10(nk_up$p_adj), nk_up$go_id)
+scores_nk_up <- scores_nk_up[rownames(sim_nk_up)]
+
+red_nk_up <- reduceSimMatrix(sim_nk_up, 
+                             scores_nk_up,
+                             threshold = 0.9,
+                             orgdb = "org.Hs.eg.db")
+
+png("treemap_nk_up.png", width = 2400, height = 1600, res = 250)
+treemapPlot(red_nk_up, size = "score")
+dev.off()
+
+
+p_nk_up <- scatterPlot(sim_nk_up, red_nk_up, algorithm = "umap", size = "score")
+ggsave("scatter_nk_up.png", p_nk_up,
+       width = 9, height = 7, dpi = 300, bg = "white")
+
+# Terms depleted in NK cells
+nk_down <- dplyr::filter(gsea_go, condition == "NK", score < 0)
+
+sim_nk_down <- calculateSimMatrix(nk_down$go_id, 
+                                  orgdb = "org.Hs.eg.db",
+                                  ont = "BP", 
+                                  method = "Rel")
+
+scores_nk_down <- setNames(-log10(nk_down$p_adj), nk_down$go_id)
+scores_nk_down <- scores_nk_down[rownames(sim_nk_down)]
+
+red_nk_down <- reduceSimMatrix(sim_nk_down,
+                               scores_nk_down, 
+                               threshold = 0.9, 
+                               orgdb = "org.Hs.eg.db")
+
+png("treemap_nk_down.png", width = 2400, height = 1600, res = 250)
+treemapPlot(red_nk_down, size = "score")
+dev.off()
+
+p_nk_down <- scatterPlot(sim_nk_down, red_nk_down, algorithm = "umap", size = "score")
+ggsave("scatter_nk_down.png", p_nk_down,
+       width = 9, height = 7, dpi = 300, bg = "white")
+
+# Terms enriched in CD8+ TEMRA cells
+tem_up <- dplyr::filter(gsea_go, condition == "CD8 TEMRA", score > 0)
+
+sim_tem_up <- calculateSimMatrix(tem_up$go_id, 
+                                 orgdb = "org.Hs.eg.db",
+                                 ont = "BP", 
+                                 method = "Rel")
+
+scores_tem_up <- setNames(-log10(tem_up$p_adj), tem_up$go_id)
+scores_tem_up <- scores_tem_up[rownames(sim_tem_up)]
+
+red_tem_up <- reduceSimMatrix(sim_tem_up, 
+                              scores_tem_up,
+                              threshold = 0.9, 
+                              orgdb = "org.Hs.eg.db")
+
+png("treemap_tem_up.png", width = 2400, height = 1600, res = 250)
+treemapPlot(red_tem_up, size = "score")
+dev.off()
+
+p_tem_up <- scatterPlot(sim_tem_up, red_tem_up, algorithm = "umap", size = "score")
+ggsave("scatter_tem_up.png", p_tem_up,
+       width = 9, height = 7, dpi = 300, bg = "white")
+
+# Terms depleted in CD8+ TEMRA cells
+tem_down <- dplyr::filter(gsea_go, condition == "CD8 TEMRA", score < 0)
+
+sim_tem_down <- calculateSimMatrix(tem_down$go_id, 
+                                   orgdb = "org.Hs.eg.db", 
+                                   ont = "BP", 
+                                   method = "Rel")
+
+scores_tem_down <- setNames(-log10(tem_down$p_adj), tem_down$go_id)
+scores_tem_down <- scores_tem_down[rownames(sim_tem_down)]
+
+red_tem_down <- reduceSimMatrix(sim_tem_down, 
+                                scores_tem_down,
+                                threshold = 0.9, 
+                                orgdb = "org.Hs.eg.db")
+
+png("treemap_tem_down.png", width = 2400, height = 1600, res = 250)
+treemapPlot(red_tem_down, size = "score")
+dev.off()
+
+p_tem_down <- scatterPlot(sim_tem_down, red_tem_down, algorithm = "umap", size = "score")
+ggsave("scatter_tem_down.png", p_tem_down,
+       width = 9, height = 7, dpi = 300, bg = "white")
+
 gsea_plotting <- gsea_contrast |>
   filter(!source %in% c(drop, drop2)) |>
   mutate(pathway = gsub("_", " ", sub("^GOBP_", "", source)),

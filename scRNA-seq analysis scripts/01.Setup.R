@@ -46,6 +46,7 @@ library(stringr)
 library(igraph)
 library(rrvgo)
 library(org.Hs.eg.db)
+library(grid)
 
 # Fixes the random number generator so that anything stochastic (UMAP,
 # clustering, downsampling) gives the same answer every time the script runs.

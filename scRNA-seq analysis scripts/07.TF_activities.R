@@ -199,6 +199,11 @@ net_homo <- msigdbr(species = "Homo sapiens", collection = "C5", subcollection =
   dplyr::filter(dplyr::n() <= 500) |>
   dplyr::ungroup()
 
+# Create GO ID lookup
+go_ids <- msigdbr(species = "Homo sapiens",
+                  collection = "C5", subcollection = "GO:BP") |>
+  dplyr::distinct(source = gs_name, go_id = gs_exact_source)
+
 # Run GSEA
 gsea_contrast <- decoupleR::run_fgsea(
   mat = stat_mat,
@@ -214,51 +219,47 @@ gsea_contrast <- decoupleR::run_fgsea(
   dplyr::mutate(p_adj = p.adjust(p_value, method = "BH")) |>
   dplyr::ungroup()
 
-# Flag GO terms whose signal is driven predominantly by ribosomal protein genes 
+# Drop terms mostly driven by ribosomal protein genes
+#
 # Several GO:BP terms (myoblast fusion, syncytium formation, muscle contraction)
-# carry ~45 RPL genes as erroneous members. In this contrast their entire leading
-# edge is ribosomal, so they report the translational program under an incorrect muscle label.
-# Identify them from the leading edge which generates the NES.
-# Correctly-annotated translation terms to retain as the representative finding
+# carry ~45 RP genes. In this contrast their entire leading
+# edge is ribosomal, so they report the translational programme under an
+# incorrect muscle label. Identified from the leading edge, which generates the
+# NES, and unioned across contrasts so both panels are filtered by one rule.
+#
+# Correctly-annotated translation terms are retained.
 keep_translation <- c("GOBP_CYTOPLASMIC_TRANSLATION",
                       "GOBP_RIBOSOME_BIOGENESIS",
                       "GOBP_RRNA_PROCESSING")
 
 pathways <- split(net_homo$target, net_homo$source)
-ribo_re <- "^(RP[LS]|UBA52|FAU|RACK1)"
+ribo_re  <- "^(RP[LS]|UBA52|FAU|RACK1)"
 
 ribo_drop <- function(col) {
   f <- fgsea::fgsea(pathways, stat_mat[, col],
                     minSize = 15, maxSize = 500, eps = 0)
   f[, .(pathway,
-        n_le = lengths(leadingEdge),
+        n_le    = lengths(leadingEdge),
         ribo_le = sapply(leadingEdge, \(g) mean(grepl(ribo_re, g))))
-  ][ribo_le > 0.5 & n_le >= 10, pathway] # n_le floor ignores 1-gene edges
+  ][ribo_le > 0.5 & n_le >= 8, pathway] 
 }
 
-drop <- unique(unlist(lapply(colnames(stat_mat), ribo_drop)))
-drop <- setdiff(drop, keep_translation)
+ribo_terms_saved <- unique(unlist(lapply(colnames(stat_mat), ribo_drop)))
+ribo_terms_saved <- setdiff(ribo_terms_saved, keep_translation)
 
-# Union across conditions so both panels are filtered by the same rule
-drop2 <- c("GOBP_NEUROINFLAMMATORY_RESPONSE",
-           "GOBP_MATURATION_OF_SSU_RRNA",
-           "GOBP_CYTOPLASMIC_TRANSLATIONAL_INITIATION",
-           "GOBP_RIBOSOMAL_SMALL_SUBUNIT_ASSEMBLY",
-           "GOBP_RRNA_METABOLIC_PROCESS",
-           "GOBP_PROTEIN_RNA_COMPLEX_ORGANIZATION")
+ribo_terms <- unique(unlist(lapply(colnames(stat_mat), ribo_drop)))
+ribo_terms <- setdiff(ribo_terms, keep_translation)
 
-# GSEA visualisation
-# Create GO ID lookup
-go_ids <- msigdbr(species = "Homo sapiens",
-                  collection = "C5", subcollection = "GO:BP") |>
-  dplyr::distinct(source = gs_name, go_id = gs_exact_source)
+ribo_terms <- character(0)
 
+# Keep only significant terms with GO IDs attached
 gsea_go <- gsea_contrast |>
-  dplyr::filter(!source %in% c(drop, drop2)) |>
+  dplyr::filter(!source %in% ribo_terms) |>
   dplyr::left_join(go_ids, by = "source") |>
   dplyr::filter(p_adj < 0.05, !is.na(go_id))
 
-# Terms enriched in NK cells
+# Semantic similarity reduction
+# NK-enriched
 nk_up <- dplyr::filter(gsea_go, condition == "NK", score > 0)
 
 sim_nk_up <- calculateSimMatrix(nk_up$go_id,
@@ -274,16 +275,7 @@ red_nk_up <- reduceSimMatrix(sim_nk_up,
                              threshold = 0.9,
                              orgdb = "org.Hs.eg.db")
 
-png("treemap_nk_up.png", width = 2400, height = 1600, res = 250)
-treemapPlot(red_nk_up, size = "score")
-dev.off()
-
-
-p_nk_up <- scatterPlot(sim_nk_up, red_nk_up, algorithm = "umap", size = "score")
-ggsave("scatter_nk_up.png", p_nk_up,
-       width = 9, height = 7, dpi = 300, bg = "white")
-
-# Terms depleted in NK cells
+# NK-depleted
 nk_down <- dplyr::filter(gsea_go, condition == "NK", score < 0)
 
 sim_nk_down <- calculateSimMatrix(nk_down$go_id, 
@@ -299,15 +291,7 @@ red_nk_down <- reduceSimMatrix(sim_nk_down,
                                threshold = 0.9, 
                                orgdb = "org.Hs.eg.db")
 
-png("treemap_nk_down.png", width = 2400, height = 1600, res = 250)
-treemapPlot(red_nk_down, size = "score")
-dev.off()
-
-p_nk_down <- scatterPlot(sim_nk_down, red_nk_down, algorithm = "umap", size = "score")
-ggsave("scatter_nk_down.png", p_nk_down,
-       width = 9, height = 7, dpi = 300, bg = "white")
-
-# Terms enriched in CD8+ TEMRA cells
+# CD8+ TEMRA-enriched
 tem_up <- dplyr::filter(gsea_go, condition == "CD8 TEMRA", score > 0)
 
 sim_tem_up <- calculateSimMatrix(tem_up$go_id, 
@@ -323,15 +307,7 @@ red_tem_up <- reduceSimMatrix(sim_tem_up,
                               threshold = 0.9, 
                               orgdb = "org.Hs.eg.db")
 
-png("treemap_tem_up.png", width = 2400, height = 1600, res = 250)
-treemapPlot(red_tem_up, size = "score")
-dev.off()
-
-p_tem_up <- scatterPlot(sim_tem_up, red_tem_up, algorithm = "umap", size = "score")
-ggsave("scatter_tem_up.png", p_tem_up,
-       width = 9, height = 7, dpi = 300, bg = "white")
-
-# Terms depleted in CD8+ TEMRA cells
+# CD8+ TEMRA-depleted
 tem_down <- dplyr::filter(gsea_go, condition == "CD8 TEMRA", score < 0)
 
 sim_tem_down <- calculateSimMatrix(tem_down$go_id, 
@@ -347,20 +323,65 @@ red_tem_down <- reduceSimMatrix(sim_tem_down,
                                 threshold = 0.9, 
                                 orgdb = "org.Hs.eg.db")
 
-png("treemap_tem_down.png", width = 2400, height = 1600, res = 250)
+
+# Main figure: enriched terms in both contrasts
+png("treemap_up_combined_nonfilt.png", width = 2400, height = 3200, res = 250)
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(2, 1)))
+
+treemapPlot(red_nk_up, size = "score",
+            title = "A  NK vs pooled naive T",
+            vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
+
+treemapPlot(red_tem_up, size = "score",
+            title = "B  CD8 TEMRA vs CD8+ naive T",
+            vp = viewport(layout.pos.row = 2, layout.pos.col = 1))
+dev.off()
+
+# Supplementary figures from GSEA
+png("treemap_nk_down_nonfilt.png", width = 2400, height = 1600, res = 250)
+treemapPlot(red_nk_down, size = "score")
+dev.off()
+
+png("treemap_tem_down_nonfilt.png", width = 2400, height = 1600, res = 250)
 treemapPlot(red_tem_down, size = "score")
 dev.off()
 
-p_tem_down <- scatterPlot(sim_tem_down, red_tem_down, algorithm = "umap", size = "score")
-ggsave("scatter_tem_down.png", p_tem_down,
-       width = 9, height = 7, dpi = 300, bg = "white")
+p_nk_up <- scatterPlot(sim_nk_up, red_nk_up, algorithm = "umap", size = "score")
+ggsave("scatter_nk_up.png", p_nk_up, width = 9, height = 7, dpi = 300, bg = "white")
 
+p_nk_down <- scatterPlot(sim_nk_down, red_nk_down, algorithm = "umap", size = "score")
+ggsave("scatter_nk_down.png", p_nk_down, width = 9, height = 7, dpi = 300, bg = "white")
+
+p_tem_up <- scatterPlot(sim_tem_up, red_tem_up, algorithm = "umap", size = "score")
+ggsave("scatter_tem_up.png", p_tem_up, width = 9, height = 7, dpi = 300, bg = "white")
+
+p_tem_down <- scatterPlot(sim_tem_down, red_tem_down, algorithm = "umap", size = "score")
+ggsave("scatter_tem_down.png", p_tem_down, width = 9, height = 7, dpi = 300, bg = "white")
+
+# Comparison for the results
+intersect(unique(red_nk_up$parentTerm), unique(red_tem_up$parentTerm))
+setdiff(red_nk_up$term, red_tem_up$term)
+setdiff(red_tem_up$term, red_nk_up$term)
+
+# Export the significantly enriched and depleted terms as a table
+supp_terms <- dplyr::bind_rows(
+  dplyr::mutate(red_nk_up, condition = "NK", direction = "up"),
+  dplyr::mutate(red_nk_down, condition = "NK", direction = "down"),
+  dplyr::mutate(red_tem_up, condition = "CD8 TEMRA", direction = "up"),
+  dplyr::mutate(red_tem_down,condition = "CD8 TEMRA", direction = "down")) |>
+  tibble::rownames_to_column("go_id") |>
+  dplyr::left_join(dplyr::select(gsea_go, go_id, condition, score, p_adj),
+                   by = c("go_id", "condition"))
+
+readr::write_csv(supp_terms, "supp_table_gsea_clusters.csv")
+
+# Diverging bar plot
 gsea_plotting <- gsea_contrast |>
   filter(!source %in% c(drop, drop2)) |>
   mutate(pathway = gsub("_", " ", sub("^GOBP_", "", source)),
          pathway = stringr::str_trunc(pathway, 55))
 
-# Diverging bar plot
 top_n_each <- function(d, n = 10) {
   bind_rows(d |> group_by(condition) |> slice_max(score, n = n) |> ungroup(),
             d |> group_by(condition) |> slice_min(score, n = n) |> ungroup())

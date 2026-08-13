@@ -1,8 +1,25 @@
 # ============================================================
+# Shared plot themes
+# ============================================================
+umap_theme <- theme(plot.title = element_text(size = 10, face = "bold"),
+                    axis.title = element_text(size = 8),
+                    axis.text  = element_text(size = 7))
+
+qc_theme <- theme(plot.title   = element_text(size = 11, face = "bold"),
+                  axis.title.x = element_blank(),
+                  axis.title.y = element_blank(),
+                  axis.text    = element_text(size = 8))
+
+no_x <- theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+# ============================================================
 # 6. Reference-based annotation
 # ============================================================
 
-# extract the log-normalised counts for singleR annotation
+DefaultAssay(pbmc) <- "RNA"
+Idents(pbmc) <- "leiden_res.0.7"
+
+# extract the log-normalised counts for SingleR. 
 expression <- GetAssayData(pbmc, layer = "data")
 
 # Monaco: a bulk RNA-seq reference of sorted human immune populations.
@@ -22,36 +39,17 @@ pred.main <- SingleR(
   ref = reference, 
   labels = reference$label.main)
 
-# label.fine = detailed subtypes (naive CD8 T, effector memory CD8 T)
-pred.fine <- SingleR(
-  test = expression, 
-  ref = reference, 
-  labels = reference$label.fine)
-
-# Cross-tabulate to see how the fine labels nest inside the main ones.
-table(pred.main$labels, pred.fine$labels)
-
-pbmc$main <- pred.main$labels
-pbmc$fine <- pred.fine$labels
-
-p_main <- DimPlot(pbmc, group.by = "main", label = TRUE, repel = TRUE) +
-  NoLegend() + ggtitle("label.main")
-
-p_fine <- DimPlot(pbmc, group.by = "fine", label = TRUE, repel = TRUE, label.size = 2.5) +
-  NoLegend() + ggtitle("label.fine")
-
-ggsave("08_singler_main_vs_fine.png", p_main + p_fine, width = 14, height = 6, dpi = 300)
-
 # pruned.labels sets low-confidence calls to NA instead of forcing a label.
 # Preferred over $labels because a forced guess is worse than an admitted gap.
 pbmc$singler.main <- pred.main$pruned.labels
-pbmc$singler.fine <- pred.fine$pruned.labels
+
+# How many cells were assinged a label, how many were not?
+summary(is.na(pred.main$pruned.labels))
 
 # Score heatmap: each cell's correlation against every reference label.
 # One bright row per cell = confident call. Several bright rows = the reference
 # cannot tell those subtypes apart at this level of detail.
 score_heatmap <- as.ggplot(plotScoreHeatmap(pred.main, silent = TRUE)$gtable)
-
 
 # Delta = the assigned label's score minus the median score across all other
 # labels. It measures how much better the winner was than the field.
@@ -60,7 +58,36 @@ score_heatmap <- as.ggplot(plotScoreHeatmap(pred.main, silent = TRUE)$gtable)
 # not actually present in the sample.
 delta_distribution <- plotDeltaDistribution(pred.main, ncol = 4)
 
-summary(is.na(pred.main$pruned.labels))
+# Panels for the main annotation figure
+# A. UMAP of Leiden res_0.7: the substrate everything else is mapped onto
+unsup_clus <- DimPlot(pbmc, group.by = "leiden_res.0.7",
+                      label = TRUE, repel = TRUE, label.size = 3) +
+  NoLegend() +
+  umap_theme
+
+# B. Reference-based call
+ref_label <- DimPlot(pbmc, group.by = "singler.main",
+                     label = TRUE, repel = TRUE, label.size = 2.5) +
+  NoLegend() +
+  umap_theme
+
+# C. Where the RNA reference was not enough. Two failure modes: pruned to NA 
+# (low confidence), or given a generic lineage label with no subtype. 
+# These are what the protein panel addresses.
+generic <- c("T cells", "CD4+ T cells", "CD8+ T cells")
+pbmc$anno_gap <- dplyr::case_when(
+  is.na(pbmc$singler.main) ~ "pruned (NA)",
+  pbmc$singler.main %in% generic ~ "generic label",
+  TRUE ~ "resolved")
+
+gen_plot <- DimPlot(pbmc, group.by = "anno_gap",
+                    cols = c("resolved" = "grey88",
+                             "generic label" = "#C0504D",
+                             "pruned (NA)" = "#4F81BD"),
+                    order = c("pruned (NA)", "generic label")) +
+  umap_theme +
+  theme(legend.position = "bottom", legend.text = element_text(size = 7),
+        legend.title = element_blank())
 
 # ============================================================
 # 7. Cross-check labels against clusters
@@ -68,54 +95,46 @@ summary(is.na(pred.main$pruned.labels))
 
 # SingleR labels each cell independently; clustering groups cells by similarity.
 # If the two agree, each cluster should be dominated by one label.
-tab <- table(Assigned = pred.main$pruned.labels, Cluster = pbmc$leiden_res.0.7)
+# Rows = cluster, columns = assigned label.
+singler_by_cluster <- table(Cluster  = pbmc$leiden_res.0.7,
+                            Assigned = pbmc$singler.main)
 
-# margin = 2 converts to proportions within each column, i.e. what fraction of
+# Transposed for plotting so labels are rows and clusters are columns, then
+# margin = 2 converts to proportions within each cluster, i.e. what fraction of
 # each cluster carries each label. Without this, big clusters dominate the colour
 # scale regardless of how pure they are.
-check_labels <- as.ggplot(pheatmap(prop.table(tab, margin = 2), silent = TRUE)$gtable)
+check_labels <- as.ggplot(
+  pheatmap(prop.table(t(singler_by_cluster), margin = 2), silent = TRUE)$gtable)
 
-label_check_supp <- score_heatmap / delta_distribution / check_labels +
-  plot_layout(heights = c(1, 1, 0.9)) +
-  plot_annotation(tag_levels = "A") &
-  theme(plot.tag = element_text(size = 16, face = "bold"))
+# Majority reference call per cluster, for the evidence table in section 9.
+# NA where a cluster has no labelled cells at all, so an all-pruned cluster is
+# not handed an arbitrary label by max.col().
+majority <- colnames(singler_by_cluster)[max.col(singler_by_cluster)]
+majority[rowSums(singler_by_cluster) == 0] <- NA_character_
+names(majority) <- rownames(singler_by_cluster)
 
-ggsave("Supp_Figure_02_singler_qc.png", label_check_supp,
-       width = 10, height = 16, dpi = 300, bg = "white")
 # ============================================================
 # 8. Protein-based annotation refinement
 # ============================================================
-
 set.seed(42)
 
 # Monaco's plain "T cells" label is not a real population. It is the set of cells
 # whose subtype could not be resolved from RNA. Surface protein resolves them,
 # because the markers immunologists use to define T cell subsets are proteins.
-Idents(pbmc) <- "leiden_res.0.7"
 DefaultAssay(pbmc) <- "ADT"
 
-# Lineage panel: the minimum set needed to assign a cell to a major lineage.
+# D. Lineage panel: the minimum set needed to assign a cell to a major lineage.
 # Note CD3 is decisive for T cells. A CD3-negative cell is not a T cell no matter
 # how much CD4 it has, because monocytes also carry CD4 protein.
 # CD14 and CD16 together split monocytes into classical, intermediate and
 # non-classical.
-adt_lineage <- c("CD3-PROT", "CD4-PROT", "CD8-PROT", "CD19-PROT",
-                 "CD56-PROT", "CD14-PROT", "CD16-PROT", "HLA-DR-PROT")
-
-# DotPlot: dot colour = average expression in that cluster, dot size = fraction
-# of cells in the cluster expressing it. Both matter, because a high average
-# driven by a few cells means something different from uniform expression.
-ggsave("12_adt_lineage_dotplot.png",
-       DotPlot(pbmc, features = adt_lineage) + RotatedAxis(),
-       width = 8, height = 7, dpi = 300)
-
-# Stacked violins show the full distribution, which reveals bimodality (a
-# genuinely positive subset within a cluster) that a dot plot average hides.
-# pt.size = 0 hides individual points so the shapes stay readable.
-ggsave("13_adt_lineage_violin.png",
-       VlnPlot(pbmc, adt_lineage, stack = TRUE, flip = TRUE, pt.size = 0) + NoLegend(),
-       width = 9, height = 8, dpi = 300)
-
+lineage_features <- FeaturePlot(pbmc,
+                                c("CD3-PROT", "CD8-PROT", "CD56-PROT", "CD45RA-PROT",
+                                  "CD14-PROT", "CD16-PROT", "CD19-PROT", "HLA-DR-PROT"),
+                                ncol = 4, min.cutoff = "q05", max.cutoff = "q95",
+                                cols = c("grey90", "#08519C")) &
+  umap_theme & NoAxes() & coord_fixed() &
+  theme(plot.title = element_text(size = 9))
 
 # Subset markers: 
 # memory/naive state (CD45RA, CD45RO, CD62L, CD197)
@@ -133,9 +152,15 @@ adt_subset <- c("CD45RA-PROT", "CD45RO-PROT", "CD62L-PROT", "CD197-PROT",
                 "CD11c-PROT", "CD123-PROT", "CD1c-PROT", "CD303-PROT",
                 "CD20-PROT", "CD27-PROT", "IgD-PROT", "IgM-PROT", "CD34-PROT")
 
-ggsave("14_adt_subset_dotplot.png",
-       DotPlot(pbmc, features = adt_subset) + RotatedAxis(),
-       width = 12, height = 7, dpi = 300)
+subset_adt <- DotPlot(pbmc, features = adt_subset, dot.scale = 4) +
+  coord_flip() +
+  labs(x = "Protein marker", y = "Cluster") +
+  theme(axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8),
+        legend.position = "right",
+        legend.key.size = unit(0.4, "cm"),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 7))
 
 # RNA markers as secondary evidence
 DefaultAssay(pbmc) <- "RNA"
@@ -158,25 +183,28 @@ markers_rna <- c(
 
 markers_rna <- intersect(markers_rna, rownames(pbmc))
 
-ggsave("17_rna_markers_dotplot.png",
-       DotPlot(pbmc, features = markers_rna) + RotatedAxis(),
-       width = 14, height = 7, dpi = 300)
+# E. Canonical PBMC marker dot plot
+dot_canonical <- DotPlot(pbmc, features = markers_rna) + RotatedAxis()
 
 # Doublet and quality checks.
 # A cluster showing markers of two mutually exclusive lineages (CD3 and CD14
 # together, or both CD4-high and CD8-high) is probably two cells captured in one
 # droplet. Elevated counts and genes relative to neighbouring clusters supports
 # that, since two cells contribute roughly twice the RNA.
-ggsave("18_counts_features.png",
-       VlnPlot(pbmc, c("nCount_RNA", "nFeature_RNA"), pt.size = 0, ncol = 1) + NoLegend(),
-       width = 10, height = 7, dpi = 300)
+v1 <- VlnPlot(pbmc, "nCount_RNA", group.by = "leiden_res.0.7", pt.size = 0) +
+  NoLegend() + qc_theme + no_x
 
-ggsave("19_percent_mt.png",
-       VlnPlot(pbmc, "percent.mt", pt.size = 0) + NoLegend(),
-       width = 8, height = 5, dpi = 300)
+v2 <- VlnPlot(pbmc, "nFeature_RNA", group.by = "leiden_res.0.7", pt.size = 0) +
+  NoLegend() + qc_theme + no_x
 
-# Unbiased markers: for each cluster, test every gene for higher expression in
-# that cluster than in all other cells combined (one-vs-rest, Wilcoxon by default).
+v3 <- VlnPlot(pbmc, "percent.mt", group.by = "leiden_res.0.7", pt.size = 0) +
+  NoLegend() + qc_theme +
+  xlab("Leiden cluster (res 0.7)") +
+  theme(axis.title.x = element_text(size = 10))
+
+# Unbiased marker check
+# For each cluster, test every gene for higher expression in that cluster 
+# than in all other cells combined (one-vs-rest, Wilcoxon by default).
 all_markers <- FindAllMarkers(
   pbmc,
   only.pos = TRUE,
@@ -201,135 +229,150 @@ print(top_markers, n = Inf)
 # plot stays legible and small clusters are not visually swamped by large ones.
 top_markers_heatmap <- DoHeatmap(subset(pbmc, downsample = 100),
                                  features = top_markers$gene,
-                                 group.by = "seurat_clusters",
+                                 group.by = "leiden_res.0.7",
                                  size = 2.5, angle = 0, hjust = 0.5) +
   theme(axis.text.y = element_text(size = 7)) +
   NoLegend()
 
-ggsave("supp_fig_04_marker_heatmap.png", top_markers_heatmap,
-       width = 6.2, height = 0.12 * nrow(top_markers) + 1)
+
 
 # ============================================================
 # 9. Final labels
 # ============================================================
-singler_by_cluster <- table(pbmc$leiden_res.0.7, pbmc$singler.main)
-majority <- colnames(singler_by_cluster)[max.col(singler_by_cluster)]
-names(majority) <- rownames(singler_by_cluster)
+# Labels assigned from three pieces of evidence: SingleR/Monaco, ADT surface
+# phenotype, and unbiased RNA markers. Where they disagreed, protein and
+# canonical markers took precedence over the reference call.
+#
+# This table is the single source of truth: the cluster -> label mapping applied
+# below is derived from it, so the supplementary table cannot drift out of step
+# with the labels used in the figures.
+evidence <- tibble::tribble(
+  ~cluster, ~protein, ~rna, ~label,
+  "1",  "CD3+ CD4+ CD62L-hi CD197-hi CD45RA+ CD127+",
+  "CCR7, SELL, TCF7, LDHB, PIK3IP1, NOSIP",
+  "CD4 naive T",
+  "2",  "CD3+ CD4+ CD45RO-hi CD45RA-lo CD25-hi CD127+",
+  "IL7R, LTB, IL32, CD69, ITGB1; CCR7/SELL absent",
+  "CD4 memory T",
+  "3",  "CD14-hi CD16-neg HLA-DR+ CD11c+",
+  "CD14, LYZ, S100A8/9/12, VCAN, LGALS2, MS4A6A",
+  "Classical monocytes",
+  "4",  "CD3+ CD8+ CD57-hi CD62L-neg CD45RO+",
+  "GZMH, GNLY, FGFBP2, NKG7, CST7, GZMA/GZMM",
+  "CD8 TEMRA",
+  "5",  "CD3+ CD8+ CD161-hi CD45RO-hi CD127+ CD279+",
+  "GZMK, KLRB1, DUSP2, IL7R, CCL5",
+  "MAIT / CD8 EM",
+  "6",  "CD3-neg CD56-hi CD16-hi",
+  "KLRF1, KLRD1, SPON2, CLIC3, PRF1, GZMB, GNLY",
+  "NK",
+  "7",  "CD19+ CD20-hi IgD-hi IgM-hi CD27-neg",
+  "TCL1A, MS4A1, CD79A/B, HLA-DQ/DR",
+  "Naive B",
+  "8",  "CD3+ CD8-hi CD62L+ CD197-hi CD45RA+",
+  "CD8B, CCR7, TCF7, SELL, NOSIP, PIK3IP1, LDHB",
+  "CD8 naive T",
+  "9",  "No lineage-defining protein",
+  "MT-* genes and MALAT1 only; several with pct.2 > pct.1",
+  "Low quality",
+  "10", "CD19+ CD20-hi CD27+ IgM+ IgD-lo CD11c+",
+  "BANK1, MS4A1, CD79A/B, IGJ; TCL1A absent",
+  "Memory B",
+  "11", "CD16-hi CD14-lo CD11c-hi",
+  "FCGR3A, MS4A7, CDKN1C, CSF1R, LST1, LILRB2, TCF7L2",
+  "Non-classical monocytes",
+  "12", "CD1c-hi CD11c+ HLA-DR-hi CD14-neg",
+  "FCER1A, CLEC10A, CD1C, CPVL, HLA-DPA1/DQA1",
+  "cDC2",
+  "13", "CD14-hi CD16-neg CD11c+",
+  "S100A8, FCGR1A, FOLR3, GBP1, WARS, TNFSF10, TYMP",
+  "Activated classical monocytes",
+  "14", "CD303-hi CD123-hi CD11c-neg HLA-DR+",
+  "LILRA4, CLEC4C, SCT, SERPINF1, DNASE1L3, LRRC26",
+  "pDC",
+  "15", "CD3+ CD4+ CD8+ CD19+ CD16+ (mutually exclusive)",
+  "MKI67, TYMS, RRM2, TK1, PCNA, STMN1",
+  "Doublets",
+  "16", "All lineage proteins flat",
+  "SDPR/CAVIN2, PPBP, PF4, HIST1H2AC, TSC22D1",
+  "Platelets")
 
-# Labels assigned from three pieces of evidence: SingleR/Monaco,
-# ADT surface phenotype, and unbiased RNA marker. 
-# Where they disagreed, protein and canonical markers took precedence over the reference call.
-final_label <- c(
-  # CD3+ CD4+ | CD62L-hi CD197(CCR7)-hi CD45RA+ CD127+ | RNA: CCR7, SELL, TCF7, LDHB, PIK3IP1, NOSIP
-  "1"  = "CD4 naive T",
-  
-  # CD3+ CD4+ | CD45RO-hi CD45RA-lo CD25-hi CD127+ | RNA: IL7R, LTB, IL32, CD69, ITGB1; CCR7/SELL absent
-  "2"  = "CD4 memory T",
-  
-  # CD14-hi CD16-neg HLA-DR+ CD11c+ | RNA: CD14, LYZ, S100A8/9/12, VCAN, LGALS2, MS4A6A
-  "3"  = "classical monocytes",
-  
-  # CD3+ CD8+ | CD57-hi CD62L-neg CD45RO+ | RNA: GZMH, GNLY, FGFBP2, NKG7, CST7, GZMA/GZMM
-  "4"  = "CD8 TEMRA",
-  
-  # CD3+ CD8+ | CD161-hi CD45RO-hi CD127+ CD279+ | RNA: GZMK, KLRB1, DUSP2, IL7R, CCL5
-  "5"  = "MAIT / CD8 EM",
-  
-  # CD3-neg | CD56-hi CD16-hi | RNA: KLRF1, KLRD1, SPON2, CLIC3, PRF1, GZMB, GNLY
-  "6"  = "NK",
-  
-  # CD19+ CD20-hi | IgD-hi IgM-hi CD27-neg | RNA: TCL1A, MS4A1, CD79A/B, HLA-DQ/DR
-  "7"  = "Naive B",
-  
-  # CD3+ CD8-hi | CD62L+ CD197-hi CD45RA+ | RNA: CD8B, CCR7, TCF7, SELL, NOSIP, PIK3IP1, LDHB
-  "8"  = "CD8 naive T",
-  
-  # No lineage-defining protein
-  # RNA: only MT-* genes and MALAT1
-  "9"  = "Low quality",
-  
-  # CD19+ CD20-hi | CD27+ IgM+ IgD-lo CD11c+ | RNA: BANK1, MS4A1, CD79A/B, IGJ; TCL1A absent
-  "10" = "Memory B",
-  
-  # CD16-hi CD14-lo CD11c-hi | RNA: FCGR3A, MS4A7, CDKN1C, CSF1R, LST1, LILRB2, TCF7L2
-  "11" = "non-classical monocytes",
-  
-  # CD1c-hi CD11c+ HLA-DR-hi CD14-neg | RNA: FCER1A, CLEC10A, CD1C, CPVL, HLA-DPA1/DQA1
-  "12" = "cDC2",
-  
-  # CD14-hi CD16-neg CD11c+ (same lineage protein as cl.3)
-  # RNA: S100A8 + FCGR1A(CD64), FOLR3, GBP1, WARS, TNFSF10, TYMP — IFN-stimulated state
-  "13" = "activated classical monocytes",
-  
-  # CD303(CLEC4C)-hi CD123-hi CD11c-neg HLA-DR+ | RNA: LILRA4, CLEC4C, SCT, SERPINF1, DNASE1L3, LRRC26
-  "14" = "pDC",
-  
-  # CD3 + CD4 + CD8 + CD19 + CD16 all positive in one cluster (mutually exclusive lineages)
-  # RNA: MKI67, TYMS, RRM2, TK1, PCNA, STMN1 — cycling signature, but protein says doublet
-  "15" = "Doublets",
-  
-  # All lineage proteins flat
-  # RNA: SDPR(CAVIN2), PPBP, PF4, HIST1H2AC, TSC22D1 — unambiguous platelet
-  "16" = "Platelets")
-
-# Map cluster IDs to labels. unname() strips the cluster-number names that
-# indexing carries over, then cell barcodes are attached instead.
-lab <- unname(final_label[as.character(pbmc$leiden_res.0.7)])
-names(lab) <- colnames(pbmc)
-pbmc$celltype <- lab
-
-# Fix the display order: related populations next to each other, artefacts last. 
-# Without an explicit factor order, plots and tables will sort alphabetically.
+# Display order: related populations next to each other, artefacts last.
+# Without an explicit factor order, plots and tables sort alphabetically.
 celltype_levels <- c(
   "CD4 naive T", "CD4 memory T",
   "CD8 naive T", "CD8 TEMRA", "MAIT / CD8 EM",
   "NK",
   "Naive B", "Memory B",
-  "classical monocytes", "activated classical monocytes", "non-classical monocytes",
+  "Classical monocytes", "Activated classical monocytes", "Non-classical monocytes",
   "cDC2", "pDC",
   "Platelets", "Doublets", "Low quality")
 
-pbmc$celltype <- factor(pbmc$celltype, levels = celltype_levels)
+# Guards: every cluster in the data is described, and the display order names
+# exactly the labels used. Either mismatch would silently produce NAs.
+stopifnot(setequal(evidence$cluster, levels(factor(pbmc$leiden_res.0.7))),
+          setequal(evidence$label, celltype_levels))
+
+final_label <- setNames(evidence$label, evidence$cluster)
+lab <- unname(final_label[as.character(pbmc$leiden_res.0.7)])
+names(lab) <- colnames(pbmc)
+pbmc$celltype <- factor(lab, levels = celltype_levels)
 Idents(pbmc) <- "celltype"
 
-ggsave("21_umap_celltype.png",
-       DimPlot(pbmc, label = TRUE, repel = TRUE, label.size = 3) + NoLegend(),
-       width = 8, height = 7, dpi = 300)
+# Final annotated UMAP (its own figure, not a panel of the composite)
+final_annot <- DimPlot(pbmc, label = TRUE, repel = TRUE, label.size = 5.5) +
+  NoLegend() +
+  theme(axis.title = element_text(size = 13),
+        axis.text  = element_text(size = 11))
 
-# Remove non-cells and failed populations. Platelets are real but anucleate with
-# almost no transcriptome, so they are not informative here.
-# invert = TRUE keeps everything except the listed types.
-pbmc.clean <- subset(pbmc, subset = celltype %in%
-                       c("Low quality", "Doublets", "Platelets"), invert = TRUE)
-
-saveRDS(pbmc.clean, "pbmc_annotated.rds")
-
-evidence <- tibble::tribble(
-  ~cluster, ~protein, ~rna, ~label,
-  "1", "CD3+ CD4+ CD62L-hi CD197-hi CD45RA+ CD127+", "CCR7, SELL, TCF7, LDHB, PIK3IP1, NOSIP", "CD4 naive T",
-  "2", "CD3+ CD4+ CD45RO-hi CD45RA-lo CD25-hi CD127+", "IL7R, LTB, IL32, CD69, ITGB1; CCR7/SELL absent", "CD4 memory T",
-  "3", "CD14-hi CD16-neg HLA-DR+ CD11c+", "CD14, LYZ, S100A8/9/12, VCAN, LGALS2, MS4A6A", "Classical monocytes",
-  "4", "CD3+ CD8+ CD57-hi CD62L-neg CD45RO+", "GZMH, GNLY, FGFBP2, NKG7, CST7, GZMA/GZMM", "CD8 TEMRA",
-  "5", "CD3+ CD8+ CD161-hi CD45RO-hi CD127+ CD279+", "GZMK, KLRB1, DUSP2, IL7R, CCL5", "MAIT / CD8 EM",
-  "6", "CD3-neg CD56-hi CD16-hi", "KLRF1, KLRD1, SPON2, CLIC3, PRF1, GZMB, GNLY", "NK",
-  "7", "CD19+ CD20-hi IgD-hi IgM-hi CD27-neg", "TCL1A, MS4A1, CD79A/B, HLA-DQ/DR", "Naive B",
-  "8", "CD3+ CD8-hi CD62L+ CD197-hi CD45RA+", "CD8B, CCR7, TCF7, SELL, NOSIP, PIK3IP1, LDHB", "CD8 naive T",
-  "9", "No lineage-defining protein", "MT-* genes and MALAT1 only; several with pct.2 > pct.1", "Low quality",
-  "10", "CD19+ CD20-hi CD27+ IgM+ IgD-lo CD11c+", "BANK1, MS4A1, CD79A/B, IGJ; TCL1A absent", "Memory B",
-  "11", "CD16-hi CD14-lo CD11c-hi", "FCGR3A, MS4A7, CDKN1C, CSF1R, LST1, LILRB2, TCF7L2", "Non-classical monocytes",
-  "12", "CD1c-hi CD11c+ HLA-DR-hi CD14-neg", "FCER1A, CLEC10A, CD1C, CPVL, HLA-DPA1/DQA1", "cDC2",
-  "13", "CD14-hi CD16-neg CD11c+", "S100A8, FCGR1A, FOLR3, GBP1, WARS, TNFSF10, TYMP", "Activated classical monocytes",
-  "14", "CD303-hi CD123-hi CD11c-neg HLA-DR+", "LILRA4, CLEC4C, SCT, SERPINF1, DNASE1L3, LRRC26", "pDC",
-  "15", "CD3+ CD4+ CD8+ CD19+ CD16+ (mutually exclusive)", "MKI67, TYMS, RRM2, TK1, PCNA, STMN1", "Doublets",
-  "16", "All lineage proteins flat", "SDPR/CAVIN2, PPBP, PF4, HIST1H2AC, TSC22D1", "Platelets")
-
-# add cell counts and SingleR majority call, so the table carries data not just prose
+# Cell counts and majority reference call, so the table carries data not prose
 evidence <- evidence %>%
-  dplyr::mutate(
-    n_cells = as.integer(table(pbmc$leiden_res.0.7)[cluster]),
-    singler = colnames(singler_by_cluster)[max.col(singler_by_cluster)][
-      match(cluster, rownames(singler_by_cluster))])
+  dplyr::mutate(n_cells = as.integer(table(pbmc$leiden_res.0.7)[cluster]),
+                singler = unname(majority[cluster]))
 
+# ============================================================
+# 10. Figures
+# ============================================================
+
+# Main figures
+# Clusters -> reference call -> where it fell short -> protein and RNA evidence
+# -> final annotated populations
+fig_annotate_step <- (unsup_clus | ref_label | gen_plot) /
+  wrap_elements(lineage_features) /
+  wrap_elements(dot_canonical) /
+  final_annot +
+  plot_layout(heights = c(4.5, 6, 9, 12)) +
+  plot_annotation(tag_levels = "A",
+                  theme = theme(plot.title = element_text(size = 14, face = "bold")))
+
+ggsave("Annotation_Step.png", fig_annotate_step,
+       width = 15, height = 23, dpi = 300, bg = "white")
+
+# Supplementary figures 
+# Reference-based annotation QC
+supp_singler <- score_heatmap / delta_distribution / check_labels +
+  plot_layout(heights = c(1, 1, 0.9)) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 16, face = "bold"))
+
+ggsave("Singler_qc.png", supp_singler,
+       width = 10, height = 16, dpi = 300, bg = "white")
+
+# Subset-defining surface proteins
+ggsave("sub_adt_dotplot.png", subset_adt,
+       width = 6.2, height = 7, dpi = 600)
+
+# Unbiased top markers per cluster
+ggsave("marker_heatmap.png", top_markers_heatmap,
+       width = 6.2, height = 0.12 * nrow(top_markers) + 1)
+
+# Per-cluster QC supporting the doublet and low-quality calls
+supp_qc <- v1 / v2 / v3 + plot_annotation(tag_levels = "A")
+
+ggsave("qc_per_cluster.png", supp_qc,
+       width = 11, height = 9, dpi = 300)
+
+# ---- Supplementary table ---------------------------------------------------
 evidence %>%
   dplyr::select(Cluster = cluster, `n cells` = n_cells,
                 `SingleR (majority)` = singler,
@@ -338,4 +381,15 @@ evidence %>%
   gt::gt() %>%
   gt::tab_header(title = "Evidence supporting cell type assignment") %>%
   gt::tab_source_note("Clusters from Leiden clustering at resolution 0.7") %>%
-  gt::gtsave("supp_table_annotation.png")
+  gt::gtsave("Table_annotation_features.png")
+
+# ============================================================
+# 11. Export
+# ============================================================
+# Remove non-cells and failed populations. Platelets are real but anucleate with
+# almost no transcriptome, so they are not informative here.
+pbmc.clean <- subset(pbmc,
+                     idents = c("Low quality", "Doublets", "Platelets"),
+                     invert = TRUE)
+
+saveRDS(pbmc.clean, "pbmc_annotated.rds")

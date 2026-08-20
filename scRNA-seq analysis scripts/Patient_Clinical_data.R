@@ -223,7 +223,6 @@ xiap_v <- c("c.145C>T","c.389_392del","c.446_450del","c.553G>A","c.608G>A",
               "c.664C>T","c.712C>T","c.802C>T","c.1037dup","c.1141C>T",
               "c.1261_1262del","c.1349G>A","c.1358G>A")
 
-# Create table for each variant and affected gene
 gene_lookup <- c(
   setNames(rep("PRF1", length(prf1_v)), make_clean_names(prf1_v)),
   setNames(rep("SH2D1A", length(sh2d1a_v)), make_clean_names(sh2d1a_v)),
@@ -237,59 +236,60 @@ gc_dl <- names(data_labelled) %>%
 gc_gx <- names(genetics_use) %>% 
   str_subset("^c_")
 
-# Add PRF1 variants from original patients panel
 extra <- setdiff(gc_dl, names(gene_lookup))
+message("Assumed PRF1 (confirm): ", paste(extra, collapse = ", "))
 gene_lookup[extra] <- "PRF1"
 
 geno_cols <- union(gc_dl, gc_gx)
-n_dl <- nrow(data_labelled)
+n_dl      <- nrow(data_labelled)
 
-# Create two tables with standardised column names for joining
+
 table_dl <- data_labelled %>%
   transmute(
-    patient_id = row_number(),
-    cohort = "data_labelled",
-    original_id = as.character(`Patient ID`),
-    gene_tested = "PRF1",
-    perforin_pct = `Perforin Expression %`,
+    patient_id              = row_number(),
+    cohort                  = "data_labelled",
+    original_id             = as.character(`Patient ID`),
+    gene_tested             = "PRF1",
+    perforin_pct            = `Perforin Expression %`,
     perforin_state_recorded = NA_character_,
-    gene_affected_recorded = NA_character_,
-    result_clean = as.character(result),  
+    gene_affected_recorded  = NA_character_,
+    result_clean            = as.character(result),   # Result column from Excel
     across(all_of(gc_dl))
   )
 
 table_gx <- genetics_use %>%
   transmute(
-    patient_id = n_dl + row_number(),
-    cohort = "genetics",
-    original_id = as.character(`GOSH MRN`),
-    gene_tested = "PRF1/SH2D1A/STXBP2/XIAP",
-    perforin_pct = `Perforin Expression (CD56+ cells)`,
+    patient_id              = n_dl + row_number(),
+    cohort                  = "genetics",
+    original_id             = as.character(`GOSH MRN`),
+    gene_tested             = "PRF1/SH2D1A/STXBP2/XIAP",
+    perforin_pct            = `Perforin Expression (CD56+ cells)`,
     perforin_state_recorded = as.character(`Perforin state`),
-    gene_affected_recorded = as.character(Gene_affected),
-    result_clean = NA_character_,
+    gene_affected_recorded  = as.character(Gene_affected),
+    result_clean            = NA_character_,
     across(all_of(gc_gx))
   )
 
-# Join the two tables
+
 combined <- bind_rows(table_dl, table_gx) %>%
   mutate(across(all_of(geno_cols), ~ replace_na(as.numeric(.x), 0)))
 
 
-# Flags anyone carrying a non-pathogenic variant labelled as
-# PRF1, so it is not the analysis variable.
+# --- gene_derived: which gene the non-zero genotype columns point to ---------
+# QC only. This flags anyone carrying a common polymorphism (H300H, A91V) as
+# PRF1, so it is NOT the analysis variable.
 combined$gene_derived <- apply(as.matrix(combined[geno_cols]), 1, function(r) {
   hit <- geno_cols[r > 0]
   if (!length(hit)) "nm" else paste(sort(unique(gene_lookup[hit])), collapse = "; ")
 })
 
-# Perforin state:  >50 Normal | 10-50 Abnormal | <10 Absent
-# Gene_affected: gene with an actual pathogenic finding, not merely tested
+
 combined <- combined %>%
   mutate(
+    # perforin state:  >50 Normal | 10-50 Abnormal | <10 Absent
     perforin_state_calc = case_when(
       is.na(perforin_pct) ~ NA_character_,
-      perforin_pct < 10 ~ "Absent",
+      perforin_pct <  10 ~ "Absent",
       perforin_pct <= 50 ~ "Abnormal",
       TRUE ~ "Normal"),
     perforin_state = coalesce(perforin_state_recorded, perforin_state_calc),
@@ -303,36 +303,21 @@ combined <- combined %>%
       str_detect(result_clean, regex("polymorphism", ignore_case = TRUE)) ~ "Polymorphism",
       str_detect(result_clean, regex("^no mutation", ignore_case = TRUE)) ~ "No mutation",
       TRUE ~ NA_character_),
+    
+    # gene_affected: gene with an ACTUAL pathogenic finding, not merely tested
     gene_affected = case_when(
-      gene_affected_recorded == "PRF1" ~ "PRF1 (Pathogenic)",
-      gene_affected_recorded == "nm" ~ "No variant detected",
       !is.na(gene_affected_recorded) ~ gene_affected_recorded,
-      is.na(analysis_group) ~ NA_character_,
-      analysis_group == "Mutation" ~ "PRF1 (Pathogenic)",
-      rowSums(across(all_of(geno_cols))) > 0 ~ "PRF1 (Non-pathogenic)",
-      TRUE ~ "No PRF1 variant detected"))
+      is.na(analysis_group)~ NA_character_,
+      analysis_group == "Mutation" ~ "PRF1",
+      TRUE ~ "nm")
+  )
 
-combined <- combined %>%
-  mutate(control_type = case_when(
-    cohort == "genetics" & gene_affected_recorded == "nm" ~ "Full negative",
-    cohort == "data_labelled" & analysis_group == "No mutation" ~ "PRF1-panel negative",
-    TRUE ~ NA_character_))
-
-poly_cols <- c("c_272c_t", "c_900c_t", "c_434_t_c") 
-path_cols <- setdiff(geno_cols, poly_cols)
-
-combined <- combined %>%
-  mutate(path_alleles = rowSums(across(all_of(path_cols))),
-         zygosity = case_when(
-           path_alleles == 0 ~ "none",
-           path_alleles == 1 ~ "monoallelic",
-           TRUE ~ "biallelic"))
 
 # ============================================================================
 # QC
 # ============================================================================
 
-# Is the perforin expression the scale in both cohorts?
+# Same scale in both cohorts?
 combined %>%
   group_by(cohort) %>%
   summarise(n = n(),
@@ -340,7 +325,12 @@ combined %>%
             max = max(perforin_pct, na.rm = TRUE),
             n_missing = sum(is.na(perforin_pct)))
 
-# Does the derived gene agree with the recorded one?
+# Do my thresholds reproduce the lab's own state calls?
+combined %>%
+  filter(!is.na(perforin_state_recorded)) %>%
+  count(perforin_state_recorded, perforin_state_calc)
+
+# Does the derived gene agree with the recorded one? (genetics cohort)
 combined %>%
   filter(!is.na(gene_affected_recorded),
          gene_affected_recorded != gene_derived) %>%
@@ -359,6 +349,16 @@ combined %>%
 combined %>% 
   count(cohort, gene_affected)
 
+poly_cols <- c("c_272c_t", "c_900c_t", "c_434_t_c") 
+path_cols <- setdiff(geno_cols, poly_cols)
+
+combined <- combined %>%
+  mutate(path_alleles = rowSums(across(all_of(path_cols))),
+         zygosity = case_when(
+           path_alleles == 0 ~ "none",
+           path_alleles == 1 ~ "monoallelic",
+           TRUE ~ "biallelic"))
+
 # ============================================================================
 # Final table
 # ============================================================================
@@ -373,7 +373,7 @@ final_table <- combined %>%
 stopifnot(nrow(final_table) == n_dl + nrow(genetics_use))
 stopifnot(!any(is.na(final_table[geno_cols])))
 
-view(final_table)
+final_table
 
 # NOTE: original_id holds GOSH MRNs for the genetics cohort. Pseudonymise
 # before exporting anywhere off this machine.

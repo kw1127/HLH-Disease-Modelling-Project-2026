@@ -224,6 +224,42 @@ gene_lookup <- c(
   setNames(rep("XIAP", length(xiap_v)), make_clean_names(xiap_v))
 )
 
+# Lookup for each variant
+variant_hgvs <- c(
+  c_11g_a = "c.11G>A (p.Arg4His)",
+  c_46c_t = "c.46C>T (p.Pro16Ser)",
+  c_50del = "c.50delT",
+  c_268_t = "c.268C>T (p.Leu90=)",
+  c_272c_t = "c.272C>T (p.Ala91Val)",
+  c_386g_c = "c.386G>C",
+  c_445g_a = "c.445G>A (p.Gly149Ser)",
+  c_493g_a = "c.493G>A",
+  c_666c_a = "c.666C>A (p.His222Gln)",
+  c_694c_t = "c.694C>T",
+  c_725g_a = "c.725G>A",
+  c_731t_g = "c.731T>G (p.Leu244Arg)",
+  c_841_843del = "c.841_843del",
+  c_916g_t = "c.916G>T",
+  c_1040a_t = "c.1040A>T",
+  c_1117c_t = "c.1117C>T",
+  c_1122g_a = "c.1122G>A (p.Trp374Ter)",
+  c_1153c_t = "c.1153C>T",
+  c_1229_1230delins_cc = "c.1229_1230delGGinsCC (p.Arg410Pro)",
+  c_1357g_a = "c.1357G>A (p.Val453Met)",
+  c_1621g_a = "c.1621G>A",
+  c_194g_a = "c.194G>A",
+  c_1349g_a = "c.1349G>A",
+  c_900c_t = "c.900C>T",
+  c_822_c_t = "c.822C>T",
+  c_726c_t = "c.726C>T",
+  c_434_t_c = "c.434T>C",
+  c_539_22g_c = "c.539+22G>C",
+  c_539_39g_a = "c.539+39G>A",
+  c_539_61g_a = "c.539+61G>A",
+  c_539_82c_t = "c.539+82C>T"
+)
+
+# c.50delT in the panel data is the same variant as c.50del in the genetics data
 data_labelled <- data_labelled %>%
   rename(c_50del = c_50del_t)
 
@@ -288,6 +324,8 @@ combined <- combined %>%
       perforin_pct < 10 ~ "Absent",
       perforin_pct <= 50 ~ "Abnormal",
       TRUE ~ "Normal"),
+    # Both cohorts use the lab's thresholds; verified 67/67 agreement with
+    # recorded states (see QC below), so derive consistently for everyone
     perforin_state = perforin_state_calc,
     analysis_group = case_when(
       cohort == "genetics" & gene_affected_recorded == "nm" ~ "No mutation",
@@ -315,9 +353,17 @@ combined <- combined %>%
     TRUE ~ NA_character_))
 
 # Benign/intronic/synonymous — not counted toward zygosity
-poly_cols <- c("c_272c_t", "c_900c_t", "c_434_t_c",
-               "c_539_82c_t", "c_539_61g_a", "c_539_39g_a", "c_539_22g_c",
-               "c_822_c_t", "c_726c_t")
+poly_cols <- c(
+  "c_272c_t",
+  "c_900c_t", "c_434_t_c",
+  "c_539_82c_t", "c_539_61g_a", "c_539_39g_a", "c_539_22g_c",
+  "c_822_c_t", "c_726c_t", "c_11g_a", "c_268_t", "c_1357g_a",
+  # c.1229_1230delGGinsCC: absent from ClinVar and gnomAD; in-silico predictors
+  # suggest damaging, but three homozygous carriers had discordant perforin
+  # (0%, 18.4%, 75.6%) and no other pathogenic alleles — insufficient
+  # evidence for pathogenicity
+  "c_1229_1230delins_cc"
+)
 
 # Pathogenic PRF1 alleles only
 prf1_cols <- names(gene_lookup)[gene_lookup == "PRF1"]
@@ -335,6 +381,7 @@ combined <- combined %>%
     gene_affected %in% c("STXBP2", "XIAP") ~ gene_affected,
     analysis_group == "Mutation" & zygosity == "biallelic"   ~ "PRF1 biallelic",
     analysis_group == "Mutation" & zygosity == "monoallelic" ~ "PRF1 monoallelic",
+    analysis_group == "Mutation" & zygosity == "none" ~ "Mutation (VUS only)",
     TRUE ~ analysis_group))
 
 # ============================================================================
@@ -366,12 +413,20 @@ combined %>%
   mutate(has_variant = rowSums(across(all_of(geno_cols))) > 0) %>%
   count(result_clean, has_variant)
 
+# Anyone falling outside every group?
+combined %>%
+  filter(is.na(group)) %>%
+  count(cohort, result_clean)
+
 # Group sizes
 combined %>%
   count(cohort, analysis_group)
 
 combined %>%
   count(cohort, gene_affected)
+
+combined %>%
+  count(group)
 
 # ============================================================================
 # Final table
@@ -395,6 +450,13 @@ view(final_table)
 final_table_clean <- final_table %>%
   select(-original_id)
 
+# VUS carriers: perforin phenotype for variants kept in path_cols on
+# limited evidence
+final_table_clean %>%
+  filter(c_731t_g > 0 | c_46c_t > 0) %>%
+  select(patient_id, cohort, perforin_pct, perforin_state, group,
+         c_731t_g, c_46c_t)
+
 write.xlsx(final_table_clean, "final_table.xlsx")
 
 # ============================================================================
@@ -406,7 +468,7 @@ final_table_clean %>%
   filter(group %in% c("PRF1 biallelic", "No mutation")) %>%
   wilcox.test(perforin_pct ~ group, data = .)
 
-# p=3.05e-07
+# p=7.13e-07
 # Biallelic defects in PRF1 completely impairs protein expression.
 
 # Does perforin expression differ between monoallelic PRF1 mutations from having no mutation?
@@ -422,19 +484,22 @@ final_table_clean %>%
   wilcox.test(perforin_pct ~ group, data = .)
 
 # p=1.222e-08
+# Confounded by cohort: all polymorphism carriers are data_labelled,
+# 48/54 no-mutation patients are genetics. See within-cohort test below.
 
 final_table_clean %>%
   filter(cohort == "data_labelled", group %in% c("Polymorphism", "No mutation")) %>%
   wilcox.test(perforin_pct ~ group, data = .)
 
 # p=0.980
+# Within cohort, no difference. Pooled result was a cohort artefact.
 
 # Cohort effects in main finding
 final_table_clean %>%
   filter(cohort == "data_labelled", group %in% c("PRF1 biallelic", "No mutation")) %>%
   wilcox.test(perforin_pct ~ group, data = .)
 
-# p=0.0234
+# p=0.00600
 # Replicated in data_labelled.
 
 # Cohort effects in main finding
@@ -444,17 +509,25 @@ final_table_clean %>%
 
 # p=0.000295
 # Main findings also replicated in genetics.
-# Main findings are not rested on cohort effects.
+# Main findings do not rest on cohort effects.
+
+# Ascertainment: panel cohort is referred on low perforin, so its
+# mutation-negative patients are not a healthy comparison group
+final_table_clean %>%
+  filter(group == "No mutation") %>%
+  count(cohort, perforin_state)
 
 # ============================================================================
 # Plots
 # ============================================================================
 
+group_levels <- c("PRF1 biallelic", "PRF1 monoallelic", "Sequence variance",
+                  "Polymorphism", "No mutation", "Mutation (VUS only)",
+                  "STXBP2", "XIAP")
+
 # How does perforin expression differ between conditions?
 final_table_clean %>%
-  mutate(group = factor(group, levels = c("PRF1 biallelic", "PRF1 monoallelic",
-                                          "Sequence variance", "Polymorphism",
-                                          "No mutation", "STXBP2", "XIAP"))) %>%
+  mutate(group = factor(group, levels = group_levels)) %>%
   ggplot(aes(group, perforin_pct)) +
   geom_boxplot(outlier.shape = NA) +
   geom_jitter(aes(colour = cohort), width = 0.15, alpha = 0.6) +
@@ -466,29 +539,36 @@ final_table_clean %>%
 # How many patients in each condition are by each perforin state?
 final_table_clean %>%
   count(group, perforin_state) %>%
+  mutate(group = factor(group, levels = group_levels)) %>%
   ggplot(aes(group, n, fill = factor(perforin_state,
                                      levels = c("Absent", "Abnormal", "Normal")))) +
   geom_col(position = "fill") +
-  labs(x = NULL, y = "Proportion", fill = "Perforin state")
+  labs(x = NULL, y = "Proportion", fill = "Perforin state") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
 
 # Mutation-negative patients by cohort
 final_table_clean %>%
   filter(group == "No mutation") %>%
   ggplot(aes(cohort, perforin_pct)) +
-  geom_boxplot() + geom_jitter(width = 0.1) +
-  labs(title = "Mutation-negative patients by cohort", y = "Perforin (%)")
+  geom_boxplot() +
+  geom_jitter(width = 0.1) +
+  labs(title = "Mutation-negative patients by cohort", y = "Perforin (%)") +
+  theme_minimal()
 
 # What are the variants carried most?
 final_table_clean %>%
   summarise(across(all_of(geno_cols), ~ sum(.x > 0))) %>%
   pivot_longer(everything(), names_to = "variant", values_to = "n") %>%
   filter(n > 0) %>%
-  mutate(gene = gene_lookup[variant]) %>%
-  ggplot(aes(reorder(variant, n), n, fill = gene)) +
+  mutate(gene = gene_lookup[variant],
+         label = coalesce(variant_hgvs[variant], variant)) %>%
+  ggplot(aes(reorder(label, n), n, fill = gene)) +
   geom_col() + coord_flip() +
-  labs(x = NULL, y = "Patients carrying variant")
+  labs(x = NULL, y = "Patients carrying variant") +
+  theme_minimal()
 
-# Pathogenic PRF1 variants 
+# Pathogenic PRF1 variants by zygosity
 final_table_clean %>%
   select(patient_id, all_of(path_cols)) %>%
   pivot_longer(-patient_id, names_to = "variant", values_to = "alleles") %>%
@@ -496,11 +576,14 @@ final_table_clean %>%
   mutate(gene = gene_lookup[variant]) %>%
   filter(gene == "PRF1") %>%
   count(variant, alleles) %>%
-  mutate(state = if_else(alleles == 1, "Heterozygous", "Homozygous")) %>%
-  ggplot(aes(reorder(variant, n), n, fill = state)) +
+  mutate(state = if_else(alleles == 1, "Heterozygous", "Homozygous"),
+         label = coalesce(variant_hgvs[variant], variant)) %>%
+  ggplot(aes(reorder(label, n), n, fill = state)) +
   geom_col() + coord_flip() +
-  labs(x = NULL, y = "Patients carrying variant", fill = NULL)
+  labs(x = NULL, y = "Patients carrying variant", fill = NULL) +
+  theme_minimal()
 
+# Homozygous vs compound heterozygous among biallelic carriers
 final_table_clean %>%
   select(patient_id, all_of(path_cols)) %>%
   pivot_longer(-patient_id, names_to = "variant", values_to = "alleles") %>%
@@ -509,7 +592,3 @@ final_table_clean %>%
   summarise(n_variants = n(), total_alleles = sum(alleles)) %>%
   filter(total_alleles >= 2) %>%
   count(genotype = if_else(n_variants == 1, "Homozygous", "Compound het"))
-
-final_table_clean %>%
-  filter(group == "No mutation") %>%
-  count(cohort, perforin_state)

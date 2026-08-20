@@ -288,7 +288,7 @@ combined <- combined %>%
       perforin_pct < 10 ~ "Absent",
       perforin_pct <= 50 ~ "Abnormal",
       TRUE ~ "Normal"),
-    perforin_state = coalesce(perforin_state_recorded, perforin_state_calc),
+    perforin_state = perforin_state_calc,
     analysis_group = case_when(
       cohort == "genetics" & gene_affected_recorded == "nm" ~ "No mutation",
       cohort == "genetics" ~ "Mutation",
@@ -442,7 +442,9 @@ final_table_clean %>%
   filter(cohort == "genetics", group %in% c("PRF1 biallelic", "No mutation")) %>%
   wilcox.test(perforin_pct ~ group, data = .)
 
-# p=
+# p=0.000295
+# Main findings also replicated in genetics.
+# Main findings are not rested on cohort effects.
 
 # ============================================================================
 # Plots
@@ -507,3 +509,7 @@ final_table_clean %>%
   summarise(n_variants = n(), total_alleles = sum(alleles)) %>%
   filter(total_alleles >= 2) %>%
   count(genotype = if_else(n_variants == 1, "Homozygous", "Compound het"))
+
+final_table_clean %>%
+  filter(group == "No mutation") %>%
+  count(cohort, perforin_state)

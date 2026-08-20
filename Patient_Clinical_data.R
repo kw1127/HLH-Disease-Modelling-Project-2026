@@ -64,7 +64,7 @@ data_labelled <- data_clean %>%
 # ============================================================================
 
 # Load patient and clinical data collected from GOSH
-patients <- read_excel("~/combined_patients.xlsx", sheet = "Original") %>%
+patients <- read_excel("Clinical Data/combined_patients.xlsx", sheet = "Original") %>%
   filter(!is.na(`GOSH MRN`)) %>%
   select(-starts_with("..."))
 
@@ -160,7 +160,7 @@ patients <- patients %>%
     by = "GOSH MRN", relationship = "many-to-one", na_matches = "never")
 
 # Load neutrophils data
-neutrophils <- read_excel("~/Downloads/(No subject) (2) 2/neuts.xlsx") %>%
+neutrophils <- read_excel("Clinical Data/neuts.xlsx") %>%
   filter(!is.na(`GOSH MRN`), !is.na(`Neutrophils (x10*9/L)`)) %>%
   group_by(`GOSH MRN`) %>%
   slice_max(`Collection Date (Neutrophils)`, n = 1, with_ties = FALSE) %>%
@@ -457,7 +457,7 @@ final_table_clean %>%
   select(patient_id, cohort, perforin_pct, perforin_state, group,
          c_731t_g, c_46c_t)
 
-write.xlsx(final_table_clean, "final_table.xlsx")
+
 
 # ============================================================================
 # Stats

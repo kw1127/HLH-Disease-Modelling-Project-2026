@@ -250,8 +250,6 @@ ribo_terms_saved <- setdiff(ribo_terms_saved, keep_translation)
 ribo_terms <- unique(unlist(lapply(colnames(stat_mat), ribo_drop)))
 ribo_terms <- setdiff(ribo_terms, keep_translation)
 
-ribo_terms <- character(0)
-
 # Keep only significant terms with GO IDs attached
 gsea_go <- gsea_contrast |>
   dplyr::filter(!source %in% ribo_terms) |>
@@ -325,7 +323,7 @@ red_tem_down <- reduceSimMatrix(sim_tem_down,
 
 
 # Main figure: enriched terms in both contrasts
-png("treemap_up_combined_nonfilt.png", width = 2400, height = 3200, res = 250)
+png("treemap_up_combined.png", width = 2400, height = 3200, res = 250)
 grid.newpage()
 pushViewport(viewport(layout = grid.layout(2, 1)))
 
@@ -339,11 +337,11 @@ treemapPlot(red_tem_up, size = "score",
 dev.off()
 
 # Supplementary figures from GSEA
-png("treemap_nk_down_nonfilt.png", width = 2400, height = 1600, res = 250)
+png("treemap_nk_down.png", width = 2400, height = 1600, res = 250)
 treemapPlot(red_nk_down, size = "score")
 dev.off()
 
-png("treemap_tem_down_nonfilt.png", width = 2400, height = 1600, res = 250)
+png("treemap_tem_down.png", width = 2400, height = 1600, res = 250)
 treemapPlot(red_tem_down, size = "score")
 dev.off()
 
@@ -376,35 +374,10 @@ supp_terms <- dplyr::bind_rows(
 
 readr::write_csv(supp_terms, "supp_table_gsea_clusters.csv")
 
-# Diverging bar plot
-gsea_plotting <- gsea_contrast |>
-  filter(!source %in% c(drop, drop2)) |>
-  mutate(pathway = gsub("_", " ", sub("^GOBP_", "", source)),
-         pathway = stringr::str_trunc(pathway, 55))
-
-top_n_each <- function(d, n = 10) {
-  bind_rows(d |> group_by(condition) |> slice_max(score, n = n) |> ungroup(),
-            d |> group_by(condition) |> slice_min(score, n = n) |> ungroup())
-}
-
-gsea_barplot <- gsea_plotting |>
-  filter(p_adj < 0.05) |>
-  top_n_each(8) |>
-  mutate(pathway = reorder_within(pathway, score, condition)) |>
-  ggplot(aes(score, pathway, fill = score > 0)) +
-  geom_col() +
-  scale_y_reordered() +
-  facet_wrap(~ condition, scales = "free_y") +
-  scale_fill_manual(values = c("steelblue", "firebrick"), guide = "none") +
-  labs(x = "NES", y = NULL) +
-  theme_bw()
-
-ggsave("diverging_barplot.png", gsea_barplot, width = 10, height = 8, dpi = 300, bg = "white")
-
 # Scatter plot of TF activities
 tf_wide <- tf_contrast %>%
   mutate(cond = recode(condition, "CD8 TEMRA" = "temra", "NK" = "nk")) %>%
-  select(source, cond, score, p_adj) %>%
+  dplyr::select(source, cond, score, p_adj) %>%
   pivot_wider(names_from = cond, values_from = c(score, p_adj)) %>%
   mutate(
     sig_nk = p_adj_nk < 0.05,
@@ -457,7 +430,7 @@ hlh_obs_wide <- tibble(
   mutate(delta = temra - nk)
 
 hlh_obs_long <- hlh_obs_wide %>%
-  select(gene, NK = nk, `CD8 TEMRA` = temra) %>%
+  dplyr::select(gene, NK = nk, `CD8 TEMRA` = temra) %>%
   pivot_longer(-gene, names_to = "condition", values_to = "obs")
 
 p_hlh_obs <- hlh_obs_wide %>%

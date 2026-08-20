@@ -69,7 +69,7 @@ build_layers <- function(tag, variant) {
   de  <- hlh_de[[tag]] # DE HLH genes eligible for the downstream layer
   tfa <- tf_contrast %>% # measured activity of every TF in this contrast
     filter(condition == cond_of[[tag]]) %>%
-    select(source, tf_score = score)
+    dplyr::select(source, tf_score = score)
   
   # TF -> HLH edges. Not inferred: CollecTRI edges from TFs the model recovered.
   # Sign consistency is needed, so an inferred-active repressor cannot be drawn
@@ -77,7 +77,7 @@ build_layers <- function(tag, variant) {
   # are tested against data.
   trn_layer <- trn %>%
     filter(source %in% solved, target %in% de$target) %>% # regulator recovered, target DE
-    left_join(select(de, target, log2FoldChange), by = "target") %>%  # observed direction
+    left_join(dplyr::select(de, target, log2FoldChange), by = "target") %>%  # observed direction
     left_join(tfa, by = "source") %>% # inferred TF state
     filter(sign(tf_score) * sign(interaction) == sign(log2FoldChange)) %>%
     transmute(source, target, sign = interaction,
@@ -108,7 +108,7 @@ build_layers <- function(tag, variant) {
   meas <- readRDS(meas_file(tag, variant))
   qc <- tibble(id  = as.character(colnames(meas)),
                ulm = as.numeric(unlist(meas[1, ]))) %>%          # what went in
-    left_join(select(att, id = Node, AvgAct), by = "id") %>%     # what came out
+    left_join(dplyr::select(att, id = Node, AvgAct), by = "id") %>%     # what came out
     mutate(status = case_when(is.na(AvgAct) ~ "dropped",      # absent from solution
                               AvgAct == 0 ~ "unexplained",  # present, inferred inactive
                               sign(AvgAct) == sign(ulm) ~ "fit", # direction agrees
@@ -207,7 +207,8 @@ for (tag in tags) {
 # protein lies between them.
 hops <- function(x) {
   g <- graph_from_data_frame(   # signalling layer only: TRN edges are not paths
-    x$edges %>% filter(layer == "signalling") %>% select(source, target),
+    x$edges %>% filter(layer == "signalling") %>% 
+      dplyr::select(source, target),
     directed = TRUE)
   p <- intersect(x$nodes$id[x$nodes$layer == "perturbation"], V(g)$name)
   t <- intersect(x$nodes$id[x$nodes$layer == "TF"], V(g)$name)
@@ -234,7 +235,7 @@ for (v in variants) for (tag in tags) {
   cat("\n", v, "/", tag, " - phosphatase family, pool frequency and sign:\n", sep = "")
   print(net[[v]][[tag]]$nodes %>%
           filter(grepl("^DUSP|^PPM1|^PPP2|^PTPR|^PTPN", id)) %>%
-          select(id, layer, sign, consistency) %>%
+          dplyr::select(id, layer, sign, consistency) %>%
           arrange(desc(consistency)))   # low values plus mixed sign = interchangeable
 }
 
@@ -249,7 +250,7 @@ for (v in variants) for (tag in tags) {
 subset_to_hlh <- function(x, order = 3, keep_fragments = TRUE) {
   e   <- x$edges
   sig <- e %>% filter(layer == "signalling")
-  g   <- graph_from_data_frame(select(sig, source, target), directed = TRUE)
+  g   <- graph_from_data_frame(dplyr::select(sig, source, target), directed = TRUE)
   
   anchor_tfs <- intersect(unique(e$source[e$layer == "trn"]), V(g)$name)  # TFs with an HLH target
   keep <- unique(unlist(lapply(ego(g, order, anchor_tfs, mode = "in"),    # everything upstream
@@ -307,7 +308,8 @@ for (v in variants) for (tag in tags) {
       nrow(pruned[[v]][[tag]]$edges), " edges\n", sep = "")
   print(table(pruned[[v]][[tag]]$nodes$layer))   # all four tiers should survive
   cat("\nTF -> HLH edges retained:\n")
-  print(pruned[[v]][[tag]]$edges %>% filter(layer == "trn") %>% select(source, target, sign))
+  print(pruned[[v]][[tag]]$edges %>% filter(layer == "trn") %>% 
+          dplyr::select(source, target, sign))
 }
 
 # Figure: node-consistency plot                      
@@ -319,7 +321,7 @@ cons_df <- do.call(rbind, lapply(variants, function(v)
   do.call(rbind, lapply(tags, function(tag)
     sub[[v]][[tag]]$nodes %>%
       filter(!is.na(consistency)) %>%      # HLH genes have no pool frequency
-      select(id, layer, consistency) %>%
+      dplyr::select(id, layer, consistency) %>%
       mutate(variant  = v,
              contrast = cond_of[[tag]])))))
 
@@ -413,7 +415,7 @@ regulator_status <- function(v, from, to) {
   meas_to <- colnames(readRDS(meas_file(to, v)))   # what the other contrast had
   tibble(tf = tf_extra, measured_in_other = tf_extra %in% meas_to) %>%   # FALSE = case (i)
     left_join(tf_contrast %>% filter(condition == cond_of[[to]]) %>%
-                select(tf = source, score, p_adj), by = "tf")
+                dplyr::select(tf = source, score, p_adj), by = "tf")
 }
 
 for (v in variants) {

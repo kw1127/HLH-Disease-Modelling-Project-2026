@@ -58,7 +58,7 @@ pkn_targets <- unique(pkn$target)
 tf_aud <- meas_long %>%
   dplyr::filter(origin == "forced_hlh_regulator") %>%
   dplyr::mutate(
-    in_pkn      = source %in% pkn_nodes,
+    in_pkn = source %in% pkn_nodes,
     has_in_edge = source %in% pkn_targets,
     hlh_targets = vapply(source, function(s)
       paste(sort(trn$target[trn$source == s]), collapse = ", "), character(1))) %>%

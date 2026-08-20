@@ -18,7 +18,7 @@
 # Same naive baseline as the effector contrasts, so the comparison is like for
 # like: each control population is tested against the same resting reference.
 naive <- c("CD8 naive T", "CD4 naive T")
-controls <- c("Naive B", "classical monocytes")
+controls <- c("Naive B", "Classical monocytes")
 
 # Check representation before trusting a paired design. The effector contrasts
 # had all 21 pb_samples in every cell type; anything less weakens the pairing.
@@ -135,14 +135,14 @@ enrich <- tf_all_ct %>%
   dplyr::mutate(is_hlh = source %in% hlh_tfs, sig = p_adj < 0.05) %>%
   dplyr::group_by(condition) %>%
   dplyr::summarise(
-    hlh_sig     = sum(is_hlh & sig),
-    hlh_n       = sum(is_hlh),
-    other_sig   = sum(!is_hlh & sig),
-    other_n     = sum(!is_hlh),
-    hlh_rate    = round(100 * hlh_sig / hlh_n, 1),
-    other_rate  = round(100 * other_sig / other_n, 1),
-    fold        = round((hlh_sig / hlh_n) / (other_sig / other_n), 2),
-    p_fisher    = signif(fisher.test(
+    hlh_sig = sum(is_hlh & sig),
+    hlh_n = sum(is_hlh),
+    other_sig = sum(!is_hlh & sig),
+    other_n = sum(!is_hlh),
+    hlh_rate = round(100 * hlh_sig / hlh_n, 1),
+    other_rate = round(100 * other_sig / other_n, 1),
+    fold = round((hlh_sig / hlh_n) / (other_sig / other_n), 2),
+    p_fisher = signif(fisher.test(
       matrix(c(hlh_sig, hlh_n - hlh_sig,
                other_sig, other_n - other_sig), nrow = 2))$p.value, 3),
     .groups = "drop")
@@ -155,7 +155,7 @@ enrich
 # A1: how much more likely an HLH regulator is to be active than a random TF,
 #     within each cell type. Fold of 1 means no enrichment.
 # A2: which HLH gene each cell type's signal sits on.
-ct_order <- c("Naive B", "classical monocytes", "NK", "CD8 TEMRA")
+ct_order <- c("Naive B", "Classical monocytes", "NK", "CD8 TEMRA")
 
 pA1 <- enrich %>%
   mutate(condition = factor(condition, levels = ct_order),
@@ -167,17 +167,17 @@ pA1 <- enrich %>%
   geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
   geom_text(aes(label = lab), vjust = -0.25, size = 3, lineheight = 0.9) +
   scale_fill_manual(values = c("Naive B" = "grey70",
-                               "classical monocytes" = "#4F81BD",
+                               "Classical monocytes" = "#4F81BD",
                                "NK" = "#2166AC",
                                "CD8 TEMRA" = "#B2182B"), guide = "none") +
   scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
   labs(x = NULL,
-       y = "Enrichment of pHLH gene regulators\namong active TFs (fold)") +
+       y = "Enrichment of pHLH-associated gene regulators\namong active TFs (fold)") +
   theme_bw(base_size = 11) +
   theme(panel.grid.major.x = element_blank(),
         axis.text.x = element_text(angle = 20, hjust = 1))
 
-# proportion rather than count, so genes with large regulons do not dominate
+# proportion rather than count
 # which HLH genes each regulator targets
 tf_targets <- trn %>%
   dplyr::group_by(source) %>%
@@ -187,8 +187,8 @@ tf_targets <- trn %>%
 by_gene <- trn %>%
   dplyr::inner_join(tf_all_ct, by = "source") %>%
   dplyr::group_by(condition, target) %>%
-  dplyr::summarise(n_reg      = dplyr::n(),
-                   n_sig      = sum(p_adj < 0.05),
+  dplyr::summarise(n_reg = dplyr::n(),
+                   n_sig = sum(p_adj < 0.05),
                    median_abs = round(median(abs(score)), 2),
                    .groups = "drop") %>%
   tidyr::pivot_wider(names_from = condition,
@@ -197,7 +197,7 @@ by_gene <- trn %>%
 by_gene
 
 pA2 <- by_gene %>%
-  select(target, n_reg, starts_with("n_sig_")) %>%
+  dplyr::select(target, n_reg, starts_with("n_sig_")) %>%
   pivot_longer(starts_with("n_sig_"),
                names_to = "condition", values_to = "n_sig") %>%
   mutate(condition = factor(sub("^n_sig_", "", condition), levels = ct_order),

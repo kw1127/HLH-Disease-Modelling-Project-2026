@@ -20,7 +20,7 @@ sig_all <- ppi %>%
   filter(consensus_direction == 1, # agreed direction source -> target
          consensus_stimulation + consensus_inhibition == 1) %>% # unambiguously signed
   mutate(interaction = ifelse(consensus_stimulation == 1, 1L, -1L)) %>%
-  select(source = source_genesymbol, interaction,
+  dplyr::select(source = source_genesymbol, interaction,
          target = target_genesymbol, curation_effort) %>%
   filter(source != "", # unmapped symbols would collapse into one phantom hub
          target != "",
@@ -100,7 +100,7 @@ gtsave(grid_tbl, "table_grid.png", vwidth = 700, expand = 5)
 sig <- sig_all %>%
   filter(curation_effort >= 3,
          source %in% expressed_lax, target %in% expressed_lax) %>%
-  select(source, interaction, target)
+  dplyr::select(source, interaction, target)
 
 nrow(sig)
 
@@ -119,7 +119,7 @@ saveRDS(pkn, "pkn_carnival.rds")
 trn <- collectri %>%
   filter(target %in% hlh_chr) %>%
   mutate(interaction = as.integer(mor)) %>%
-  select(source, interaction, target) %>%
+  dplyr::select(source, interaction, target) %>%
   distinct()
 
 saveRDS(trn, "trn.rds")
@@ -132,7 +132,7 @@ hlh_de <- lapply(setNames(tags, tags), function(tag)
   as.data.frame(res_list[[tag]]) %>%
     rownames_to_column("target") %>%
     filter(target %in% hlh_chr, !is.na(padj), padj < 0.05) %>%
-    select(target, log2FoldChange, padj))
+    dplyr::select(target, log2FoldChange, padj))
 
 sapply(hlh_de, nrow)   # how many of the 8 survive per contrast
 
@@ -145,7 +145,7 @@ saveRDS(tf_contrast, "tf_contrast.rds")
 # Only downstream, via a CollecTRI regulator that CARNIVAL recovers.
 # in_signalling is reported because STXBP2 and STX11 carry protein-level
 # OmniPath edges that this design deliberately does not use.
-g_sig <- graph_from_data_frame(select(sig, source, target), directed = TRUE)
+g_sig <- graph_from_data_frame(dplyr::select(sig, source, target), directed = TRUE)
 
 hlh_audit <- tibble(gene = hlh_chr) %>%
   mutate(
@@ -163,7 +163,7 @@ hlh_audit <- tibble(gene = hlh_chr) %>%
 hlh_audit
 
 audit_tbl <- hlh_audit %>%
-  select(gene, n_tf_regulators, n_regs_in_pkn, in_signalling, de_nk, de_temra) %>%
+  dplyr::select(gene, n_tf_regulators, n_regs_in_pkn, in_signalling, de_nk, de_temra) %>%
   gt() %>%
   cols_label(gene = "Gene",
              n_tf_regulators = "CollecTRI regulators",
@@ -190,7 +190,7 @@ all_int <- import_all_interactions()
 
 all_int %>%
   filter(source_genesymbol == "PRF1") %>%
-  select(target_genesymbol, is_directed, is_stimulation,
+  dplyr::select(target_genesymbol, is_directed, is_stimulation,
          is_inhibition, curation_effort, n_references)
 
 # usable outgoing edges per HLH gene, across all OmniPath layers

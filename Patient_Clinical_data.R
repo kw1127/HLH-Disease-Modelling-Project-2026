@@ -418,8 +418,7 @@ collapse_class <- function(x) {
 # These are the variants not counted when deciding whether someone has one
 # or two pathogenic PRF1 alleles.
 poly_cols <- c(
-  # A91V is a hypomorphic risk allele rather than a null, so I leave it out of
-  # the main call and test including it in sensitivity analysis.
+  # A91V is a hypomorphic risk allele
   "c_272c_t",
   # Benign, intronic or synonymous according to ClinVar and gnomAD.
   "c_900c_t", "c_434_t_c",
@@ -642,8 +641,16 @@ final_table_clean %>%
 # p = 8.39e-10
 
 # The panel cohort was referred because of low perforin, so its mutation
-# negative patients are not a real healthy comparison group. Worth flagging as
-# an ascertainment issue.
+# negative patients are not a real healthy comparison group. 
+
+final_table_clean %>%
+  mutate(z_delins = zyg_from(., incl_delins_cols)) %>%
+  filter(group == "No mutation" |
+           (analysis_group == "Mutation" & z_delins == "biallelic")) %>%
+  mutate(cmp = if_else(group == "No mutation", "No mutation", "PRF1 biallelic")) %>%
+  wilcox.test(perforin_pct ~ cmp, data = .)
+
+# p = 2.45e-07
 
 # ============================================================================
 # Plots
@@ -796,7 +803,7 @@ gene <- gene[ord]
 vclass <- vclass[ord]
 rownames(m) <- coalesce(variant_hgvs[kept], kept)
 
-# oncoPrint would calculate percentages over the carriers only, 
+# oncoPrint calculates percentages over the carriers only, 
 # so calculate them for the whole cohort
 pct_full <- sprintf("%.0f%%", 100 * rowSums(m > 0) / nrow(final_table_clean))
 

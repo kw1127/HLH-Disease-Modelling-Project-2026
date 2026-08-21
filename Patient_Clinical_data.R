@@ -420,15 +420,18 @@ collapse_class <- function(x) {
 poly_cols <- c(
   # A91V is a hypomorphic risk allele
   "c_272c_t",
+  
   # Benign, intronic or synonymous according to ClinVar and gnomAD.
   "c_900c_t", "c_434_t_c",
   "c_539_82c_t", "c_539_61g_a", "c_539_39g_a", "c_539_22g_c",
   "c_822_c_t", "c_726c_t", "c_11g_a", "c_268_t", "c_1357g_a",
+  
   # ClinVar calls this Benign. Reclassifying it moved patient 101 out of the
   # biallelic group. That patient was homozygous with 56.1% perforin and the
   # referring lab had recorded them as PRF1 affected. Main comparison went
   # from p = 7.13e-07 to p = 5.49e-07
   "c_1153c_t",
+  
   # VarSome calls this Likely pathogenic but the evidence is thin: phyloP is
   # 0.529, so no conservation at that position, and only 2 predictors call it
   # damaging. I exclude it on that basis. I still plot it as Pathogenic/LP so
@@ -440,7 +443,7 @@ poly_cols <- c(
 prf1_cols <- names(gene_lookup)[gene_lookup == "PRF1"]
 
 # Named these prf1_ because they only count PRF1 alleles. Someone with a
-# real STXBP2 or XIAP variant will score 0 here
+# STXBP2 or XIAP variant will show 0 here
 prf1_path_cols <- setdiff(intersect(geno_cols, prf1_cols), poly_cols)
 
 combined <- combined %>%
@@ -461,7 +464,7 @@ combined <- combined %>%
     TRUE ~ analysis_group))
 
 # ============================================================================
-# QC
+# Quality control
 # ============================================================================
 
 # Is perforin expression on the same scale in both cohorts?
@@ -605,7 +608,7 @@ final_table_clean %>%
 final_table_clean %>%
   filter(group %in% c("PRF1 monoallelic", "No mutation")) %>%
   wilcox.test(perforin_pct ~ group, data = .)
-# p = 0.1457
+# p = 0.14572
 
 # Polymorphism versus no mutation.
 final_table_clean %>%
@@ -649,7 +652,6 @@ final_table_clean %>%
            (analysis_group == "Mutation" & z_delins == "biallelic")) %>%
   mutate(cmp = if_else(group == "No mutation", "No mutation", "PRF1 biallelic")) %>%
   wilcox.test(perforin_pct ~ cmp, data = .)
-
 # p = 2.45e-07
 
 # ============================================================================
@@ -932,5 +934,5 @@ clinical_figure <- plot_group / plot_neg +
   plot_layout(heights = c(1.8, 1.2)) +
   plot_annotation(tag_levels = "A")
 
-ggsave("figure_perforin_by_group.pdf", clinical_figure, width = 8, height = 9)
+ggsave("figure_perforin_by_group.png", clinical_figure, width = 8, height = 9)
 

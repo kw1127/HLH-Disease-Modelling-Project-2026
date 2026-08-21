@@ -884,18 +884,46 @@ pdf("oncoprint.pdf", width = 11, height = 10)
 draw(ht, merge_legends = TRUE, heatmap_legend_side = "right")
 dev.off()
 
-# Numbers for the figure caption.
-message(sprintf(
-  "%d carriers of %d patients (%.0f%%); %d variants shown; %d with no variant not shown",
-  nrow(ftc_plot), nrow(final_table_clean),
-  100 * nrow(ftc_plot) / nrow(final_table_clean),
-  nrow(m), nrow(final_table_clean) - nrow(ftc_plot)))
+# ============================================================================
+# Final figure
+# ============================================================================
 
-# Caption draft:
-# Variants carried by at least one patient (n = X carriers of Y), split by
-# NK cell perforin state (columns) and variant classification (rows, from
-# ClinVar and VarSome, accessed 20 August 2026; "Uncertain" covers conflicting,
-# unclassified and novel variants). Percentages are of the full cohort (n = 148).
-# Patients with no detected variant (n = 54) are not shown, so panel widths
-# reflect the perforin distribution among carriers rather than the cohort.
-# The SH2D1A splice variant has no carriers here and does not appear.
+library(patchwork)
+
+cohort_labs <- c(data_labelled = "PRF1 panel", genetics = "Four-gene cohort")
+
+plot_df <- final_table_clean %>%
+  mutate(group = factor(group, levels = group_levels),
+         cohort = recode(cohort, !!!cohort_labs))
+
+n_lab <- function(x) data.frame(y = -6, label = paste0("n = ", length(x)))
+
+plot_group <- plot_df %>%
+  add_count(group) %>%
+  ggplot(aes(group, perforin_pct)) +
+  geom_boxplot(data = ~ filter(.x, n >= 5), outlier.shape = NA) +
+  geom_jitter(aes(colour = cohort), width = 0.15, alpha = 0.7, size = 1.6) +
+  geom_hline(yintercept = c(10, 50), linetype = "dashed", alpha = 0.4) +
+  stat_summary(fun.data = n_lab, geom = "text", size = 2.8) +
+  labs(x = NULL, y = "Perforin expression (%)", colour = "Cohort") +
+  theme(legend.text = element_text(size = 8),
+        legend.title = element_text(size = 9)) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+plot_neg <- plot_df %>%
+  filter(group == "No mutation") %>%
+  ggplot(aes(cohort, perforin_pct)) +
+  geom_boxplot(outlier.shape = NA, width = 0.45) +
+  geom_jitter(width = 0.12, alpha = 0.7, size = 1.6) +
+  geom_hline(yintercept = c(10, 50), linetype = "dashed", alpha = 0.4) +
+  stat_summary(fun.data = n_lab, geom = "text", size = 2.8) +
+  labs(x = NULL, y = "Perforin expression (%)") +
+  theme_minimal(base_size = 11)
+
+clinical_figure <- plot_group / plot_neg +
+  plot_layout(heights = c(1.8, 1.2)) +
+  plot_annotation(tag_levels = "A")
+
+ggsave("figure_perforin_by_group.pdf", clinical_figure, width = 8, height = 9)
+

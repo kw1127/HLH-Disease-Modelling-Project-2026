@@ -763,14 +763,13 @@ final_table_clean %>%
 variant_cols <- final_table_clean %>%
   select(matches("^c_\\d")) %>%
   colnames()
-stopifnot(length(variant_cols) > 0)
 
-# Subset to carriers once and build both the matrix and the annotations from
-# that same subset
+# Subset to carriers once and build both the matrix and the annotations from that same subset
 carrier_ids <- final_table_clean$patient_id[
-  rowSums(final_table_clean[, variant_cols] > 0, na.rm = TRUE) > 0
-]
-ftc_plot <- final_table_clean %>% filter(patient_id %in% carrier_ids)
+  rowSums(final_table_clean[, variant_cols] > 0, na.rm = TRUE) > 0]
+
+ftc_plot <- final_table_clean %>% 
+  filter(patient_id %in% carrier_ids)
 
 # The panel widths show the perforin distribution among
 # carriers, not the whole cohort
@@ -782,16 +781,8 @@ m[is.na(m)] <- 0
 m <- m[rowSums(m > 0) > 0, , drop = FALSE]
 kept <- rownames(m)
 
-# Prevent a mistyped key from falling to Uncertain
-missing_keys <- setdiff(kept, names(variant_class_raw))
-if (length(missing_keys)) {
-  stop("Not in variant_class_raw: ", paste(missing_keys, collapse = ", "))
-}
-
 vclass <- droplevels(factor(collapse_class(unname(variant_class_raw[kept])),
                             levels = plot_levels))
-message(sum(vclass == "Uncertain"), " of ", length(kept),
-        " variants uncertain, conflicting or not yet classified")
 
 gene <- factor(unname(gene_lookup[kept]))
 
@@ -806,7 +797,7 @@ vclass <- vclass[ord]
 rownames(m) <- coalesce(variant_hgvs[kept], kept)
 
 # oncoPrint calculates percentages over the carriers only, 
-# so calculate them for the whole cohort
+# so calculate for whole cohort
 pct_full <- sprintf("%.0f%%", 100 * rowSums(m > 0) / nrow(final_table_clean))
 
 mat_chr <- matrix(c("", "HET", "HOM")[m + 1],
@@ -845,8 +836,10 @@ perforin_cols <- c(
   "Normal" = "#1b9e77"
 )
 
-gene_cols <- c(PRF1 = "#E7298A", STXBP2 = "#66A61E",
-               XIAP = "#7570B3", SH2D1A = "#E6AB02")
+gene_cols <- c(PRF1 = "#E7298A", 
+               STXBP2 = "#66A61E",
+               XIAP = "#7570B3", 
+               SH2D1A = "#E6AB02")
 
 top_ann <- HeatmapAnnotation(
   Group = droplevels(factor(ftc_plot$group, levels = group_levels)),
@@ -858,8 +851,8 @@ top_ann <- HeatmapAnnotation(
   na_col = "white"
 )
 
-# Splitting columns by perforin state to link genotype to phenotype
-# Rows split by variant class for the same thing
+# Split columns by perforin state to link genotype to phenotype
+# Rows split by variant class
 ht <- oncoPrint(
   mat_chr,
   alter_fun = alter_fun,

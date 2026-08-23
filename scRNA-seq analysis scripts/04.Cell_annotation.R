@@ -187,10 +187,12 @@ markers_rna <- intersect(markers_rna, rownames(pbmc))
 dot_canonical <- DotPlot(pbmc, features = markers_rna) + RotatedAxis()
 
 # Doublet and quality checks.
-# A cluster showing markers of two mutually exclusive lineages (CD3 and CD14
-# together, or both CD4-high and CD8-high) is probably two cells captured in one
-# droplet. Elevated counts and genes relative to neighbouring clusters supports
-# that, since two cells contribute roughly twice the RNA.
+# Elevated counts and genes relative to neighbouring clusters can indicate two
+# cells captured in one droplet. Apparent co-expression of mutually exclusive
+# lineage markers is weaker evidence: it can also arise when cells of different
+# lineages cluster together on a shared programme, in which case the markers are
+# bimodal within the cluster rather than co-expressed per cell. Checked
+# explicitly below and with scDblFinder.
 v1 <- VlnPlot(pbmc, "nCount_RNA", group.by = "leiden_res.0.7", pt.size = 0) +
   NoLegend() + qc_theme + no_x
 
@@ -290,9 +292,9 @@ evidence <- tibble::tribble(
   "14", "CD303-hi CD123-hi CD11c-neg HLA-DR+",
   "LILRA4, CLEC4C, SCT, SERPINF1, DNASE1L3, LRRC26",
   "pDC",
-  "15", "CD3+ CD4+ CD8+ CD19+ CD16+ (mutually exclusive)",
+  "15", "Mixed lineages sharing a cycling phenotype",
   "MKI67, TYMS, RRM2, TK1, PCNA, STMN1",
-  "Doublets",
+  "Proliferating cells",
   "16", "All lineage proteins flat",
   "SDPR/CAVIN2, PPBP, PF4, HIST1H2AC, TSC22D1",
   "Platelets")
@@ -306,7 +308,7 @@ celltype_levels <- c(
   "Naive B", "Memory B",
   "Classical monocytes", "Activated classical monocytes", "Non-classical monocytes",
   "cDC2", "pDC",
-  "Platelets", "Doublets", "Low quality")
+  "Platelets", "Proliferating cells", "Low quality")
 
 # Guards: every cluster in the data is described, and the display order names
 # exactly the labels used. Either mismatch would silently produce NAs.
@@ -318,6 +320,10 @@ lab <- unname(final_label[as.character(pbmc$leiden_res.0.7)])
 names(lab) <- colnames(pbmc)
 pbmc$celltype <- factor(lab, levels = celltype_levels)
 Idents(pbmc) <- "celltype"
+
+# Check where doublets were assigned
+round(prop.table(table(pbmc$celltype, pbmc$scDblFinder.class), 1), 3)
+round(prop.table(table(pbmc$celltype, pbmc$joint_classification_global), 1), 3)
 
 # Final annotated UMAP (its own figure, not a panel of the composite)
 final_annot <- DimPlot(pbmc, label = TRUE, repel = TRUE, label.size = 5.5) +
@@ -389,7 +395,7 @@ evidence %>%
 # Remove non-cells and failed populations. Platelets are real but anucleate with
 # almost no transcriptome, so they are not informative here.
 pbmc.clean <- subset(pbmc,
-                     idents = c("Low quality", "Doublets", "Platelets"),
+                     idents = c("Low quality", "Proliferating cells", "Platelets"),
                      invert = TRUE)
 
 saveRDS(pbmc.clean, "pbmc_annotated.rds")

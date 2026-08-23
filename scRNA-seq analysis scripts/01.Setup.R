@@ -16,6 +16,7 @@
 # ============================================================
 
 library(scRNAseq)
+library(scDblFinder)
 library(ggplotify)
 library(Seurat)
 library(clustree)

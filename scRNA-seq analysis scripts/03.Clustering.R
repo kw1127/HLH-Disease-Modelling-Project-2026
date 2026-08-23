@@ -28,4 +28,3 @@ pbmc <- RunUMAP(pbmc, dims = 1:15, seed.use = 42)
 
 # Find how cell clusters separate with each resolution
 ggsave("06_clustree.png", clustree(pbmc, prefix = "leiden_res."), width = 10, height = 10, dpi = 300)
-

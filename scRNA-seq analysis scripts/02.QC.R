@@ -35,8 +35,21 @@ round(sapply(metadata[, c("nFeature_RNA", "nCount_RNA", "percent.mt")],
 # subset pbmcs based on the violin plots
 pbmc <- subset(pbmc, 
                subset = nFeature_RNA > 200 & # drop empty or failed droplets
-                 nFeature_RNA < 4000 & # drop likely doublets
+                 nFeature_RNA < 4000 & # drop probable doublets
                  percent.mt < 10) # drop dying cells
+
+# Run scDblFinder as sanity check
+sce <- as.SingleCellExperiment(pbmc)
+sce$capture <- paste(pbmc$batch, pbmc$tenx_lane, sep = "_")
+
+set.seed(1)
+sce <- scDblFinder(sce, samples = "capture",
+                   BPPARAM = BiocParallel::MulticoreParam(4))
+
+pbmc$scDblFinder.class <- sce$scDblFinder.class 
+table(pbmc$scDblFinder.class)
+
+rm(sce)
 
 # ============================================================
 # 3. Attach ADT

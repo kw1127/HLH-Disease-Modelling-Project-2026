@@ -3,7 +3,7 @@
 #     cytotoxic populations?
 #
 # The anchored design forces every CollecTRI regulator of an HLH gene into the
-# measurement set. If those regulators are equally active in populations that do
+# measurement set. If they are equally active in populations that do
 # not carry the cytotoxic machinery, the anchoring is recovering generic
 # signalling rather than anything specific to the effector programme.
 #
@@ -19,13 +19,6 @@
 # like: each control population is tested against the same resting reference.
 naive <- c("CD8 naive T", "CD4 naive T")
 controls <- c("Naive B", "Classical monocytes")
-
-# Check representation before trusting a paired design. The effector contrasts
-# had all 21 pb_samples in every cell type; anything less weakens the pairing.
-meta_pb %>%
-  dplyr::filter(celltype %in% c(controls, naive)) %>%
-  dplyr::count(celltype)
-
 
 # Differential expression, control population vs pooled naive
 run_contrast <- function(ct) {
@@ -57,10 +50,10 @@ run_contrast <- function(ct) {
     hit <- grep(paste0("^celltype_", make.names(lvl), "_vs_"), rn, value = TRUE)
     stopifnot(length(hit) == 1L); hit
   }
-  con[coef_of(ct)]            <-  1
+  con[coef_of(ct)] <-  1
   con[coef_of("CD4 naive T")] <- -0.5
   
-  res  <- results(dds, contrast = unname(con), alpha = 0.05)
+  res <- results(dds, contrast = unname(con), alpha = 0.05)
   stat <- setNames(res$stat, rownames(res))
   stat[!is.na(stat)]
 }
@@ -73,7 +66,7 @@ saveRDS(stat_ctrl, "stat_controls.rds")
 # TF activity, all four populations on one matrix
 #
 # Restricted to genes tested in every contrast so the ULM fits are comparable.
-# No centring: these are already differences relative to naive.
+# No centering: these are already differences relative to naive.
 stat_all <- c(list("NK" = stat_nk, "CD8 TEMRA" = stat_temra), stat_ctrl)
 
 g_all <- Reduce(intersect, lapply(stat_all, names))
@@ -152,8 +145,8 @@ enrich
 
 # Figure: Specificity of the HLH regulatory layer      
 #
-# A1: how much more likely an HLH regulator is to be active than a random TF,
-#     within each cell type. Fold of 1 means no enrichment.
+# A1: how much more likely an HLH gene regulator is to be active than a random TF,
+#     within each cell type.
 # A2: which HLH gene each cell type's signal sits on.
 ct_order <- c("Naive B", "Classical monocytes", "NK", "CD8 TEMRA")
 

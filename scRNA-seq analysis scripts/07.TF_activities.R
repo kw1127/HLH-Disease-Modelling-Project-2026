@@ -252,7 +252,6 @@ ribo_terms <- setdiff(ribo_terms, keep_translation)
 
 # Keep only significant terms with GO IDs attached
 gsea_go <- gsea_contrast |>
-  dplyr::filter(!source %in% ribo_terms) |>
   dplyr::left_join(go_ids, by = "source") |>
   dplyr::filter(p_adj < 0.05, !is.na(go_id))
 
@@ -325,37 +324,40 @@ red_tem_down <- reduceSimMatrix(sim_tem_down,
 # Main figure: enriched terms in both contrasts
 png("treemap_up_combined.png", width = 2400, height = 3200, res = 250)
 grid.newpage()
-pushViewport(viewport(layout = grid.layout(2, 1)))
+pushViewport(viewport(layout = grid.layout(
+  4, 1, heights = unit(c(1.5, 1, 1.5, 1), c("lines", "null", "lines", "null")))))
 
-treemapPlot(red_nk_up, size = "score",
-            title = "A  NK vs pooled naive T",
-            vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
+grid.text("A  NK vs pooled naive T", x = 0.01, just = "left",
+          gp = gpar(fontsize = 16, fontface = "bold"),
+          vp = viewport(layout.pos.row = 1))
+treemapPlot(red_nk_up, size = "score", title = "",
+            vp = viewport(layout.pos.row = 2))
 
-treemapPlot(red_tem_up, size = "score",
-            title = "B  CD8 TEMRA vs CD8+ naive T",
-            vp = viewport(layout.pos.row = 2, layout.pos.col = 1))
+grid.text("B  CD8+ TEMRA vs CD8+ naive T", x = 0.01, just = "left",
+          gp = gpar(fontsize = 16, fontface = "bold"),
+          vp = viewport(layout.pos.row = 3))
+treemapPlot(red_tem_up, size = "score", title = "",
+            vp = viewport(layout.pos.row = 4))
 dev.off()
 
-# Supplementary figures from GSEA
-png("treemap_nk_down.png", width = 2400, height = 1600, res = 250)
-treemapPlot(red_nk_down, size = "score")
+# Supplementary figure: depleted terms in both contrasts
+png("treemap_down_combined.png", width = 2400, height = 3200, res = 250)
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(
+  4, 1, heights = unit(c(1.5, 1, 1.5, 1), c("lines", "null", "lines", "null")))))
+
+grid.text("A  NK vs pooled naive T", x = 0.01, just = "left",
+          gp = gpar(fontsize = 16, fontface = "bold"),
+          vp = viewport(layout.pos.row = 1))
+treemapPlot(red_nk_down, size = "score", title = "",
+            vp = viewport(layout.pos.row = 2))
+
+grid.text("B  CD8+ TEMRA vs CD8+ naive T", x = 0.01, just = "left",
+          gp = gpar(fontsize = 16, fontface = "bold"),
+          vp = viewport(layout.pos.row = 3))
+treemapPlot(red_tem_down, size = "score", title = "",
+            vp = viewport(layout.pos.row = 4))
 dev.off()
-
-png("treemap_tem_down.png", width = 2400, height = 1600, res = 250)
-treemapPlot(red_tem_down, size = "score")
-dev.off()
-
-p_nk_up <- scatterPlot(sim_nk_up, red_nk_up, algorithm = "umap", size = "score")
-ggsave("scatter_nk_up.png", p_nk_up, width = 9, height = 7, dpi = 300, bg = "white")
-
-p_nk_down <- scatterPlot(sim_nk_down, red_nk_down, algorithm = "umap", size = "score")
-ggsave("scatter_nk_down.png", p_nk_down, width = 9, height = 7, dpi = 300, bg = "white")
-
-p_tem_up <- scatterPlot(sim_tem_up, red_tem_up, algorithm = "umap", size = "score")
-ggsave("scatter_tem_up.png", p_tem_up, width = 9, height = 7, dpi = 300, bg = "white")
-
-p_tem_down <- scatterPlot(sim_tem_down, red_tem_down, algorithm = "umap", size = "score")
-ggsave("scatter_tem_down.png", p_tem_down, width = 9, height = 7, dpi = 300, bg = "white")
 
 # Comparison for the results
 intersect(unique(red_nk_up$parentTerm), unique(red_tem_up$parentTerm))

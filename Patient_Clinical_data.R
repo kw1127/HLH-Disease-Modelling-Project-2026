@@ -857,6 +857,7 @@ ht <- oncoPrint(
   mat_chr,
   alter_fun = alter_fun,
   col = col_alt,
+  row_order = 1:nrow(mat_chr),
   column_split = droplevels(factor(ftc_plot$perforin_state,
                                    levels = perforin_levels)),
   row_split = vclass,

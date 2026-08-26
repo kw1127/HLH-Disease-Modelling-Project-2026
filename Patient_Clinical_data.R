@@ -9,6 +9,7 @@ library(openxlsx)
 library(ggpubr)
 library(ComplexHeatmap)
 library(grid)
+library(patchwork)
 
 # ============================================================================
 # Original dataset: PRF1 panel data
@@ -41,7 +42,7 @@ data_clean <- data %>%
 data_clean <- data_clean %>%
   filter(if_all(starts_with("c_"), ~ !is.na(.)))
 
-# Three patients had no perforin value so impute them by average 
+# Three patients had no perforin value so impute them by state average
 data_clean <- data_clean %>%
   mutate(`Perforin Expression %` = case_when(
     `Patient ID` == 91 ~ 0.56,
@@ -182,7 +183,7 @@ patients <- patients %>%
 # patients where nothing was found.
 with_genetics <- patients %>%
   filter(!is.na(Gene_affected)) %>%
-  rename_with(make_clean_names, starts_with("c."))
+  rename_with(~ make_clean_names(.x), starts_with("c."))
 
 genetics_use <- with_genetics %>%
   select(`GOSH MRN`, `Perforin state`, `CD3 (CD8+CD107A+) (%)`, GRA,
@@ -233,7 +234,7 @@ variant_hgvs <- c(
   c_1122g_a = "c.1122G>A",
   c_1153c_t = "c.1153C>T",
   c_1229_1230delins_cc = "c.1229_1230delinsCC",
-  c_1357g_a = "c.1357G>A)",
+  c_1357g_a = "c.1357G>A",
   c_1621g_a = "c.1621G>A",
   c_194g_a = "c.194G>A",
   c_1349g_a = "c.1349G>A",
@@ -256,7 +257,7 @@ data_labelled <- data_labelled %>%
 gc_dl <- names(data_labelled) %>%
   str_subset("^c_\\d")
 
-gc_gx <- names(genetics_use) %>%
+gc_gx <- names(genetics_use) %>% 
   str_subset("^c_\\d")
 
 # Anything in the panel data that is not in the lists above must be PRF1,
@@ -269,8 +270,8 @@ geno_cols <- union(gc_dl, gc_gx)
 n_dl <- nrow(data_labelled)
 
 # The cleaning left underscores in inconsistent places (c_900c_t vs c_822_c_t).
-# If the same variant got spelled in different way then union() would keep both and
-# split carriers across two columns
+# If the same variant got spelled in different way then union() would keep both
+# and split carriers across two columns
 norm_variant <- function(x) tolower(gsub("_", "", x))
 dupe_groups <- split(geno_cols, norm_variant(geno_cols))
 dupe_groups <- dupe_groups[lengths(dupe_groups) > 1]
@@ -317,7 +318,8 @@ combined$gene_derived <- apply(as.matrix(combined[geno_cols]), 1, function(r) {
   if (!length(hit)) "nm" else paste(sort(unique(gene_lookup[hit])), collapse = "; ")
 })
 
-# Perforin state uses the lab thresholds: over 50 Normal, 10 to 50 Abnormal, under 10 Absent
+# Perforin state uses the lab thresholds: over 50 Normal, 10 to 50 Abnormal,
+# under 10 Absent
 combined <- combined %>%
   mutate(
     perforin_state_calc = case_when(
@@ -513,13 +515,13 @@ combined %>%
   count(cohort, result_clean)
 
 # Group sizes
-combined %>% 
+combined %>%
   count(cohort, analysis_group)
 
-combined %>% 
+combined %>%
   count(cohort, gene_affected)
 
-combined %>% 
+combined %>%
   count(group)
 
 # ============================================================================
@@ -542,8 +544,9 @@ final_table_clean <- final_table %>%
 # Sensitivity analyses
 # ============================================================================
 
-# Three classification calls could move patients between the main
-# comparison groups, so check each one and report both versions
+# Three classification calls could move patients between the main comparison
+# groups, so check each one and report both versions. The *_cols objects are
+# defined here because the Stats section below uses them.
 zyg_from <- function(df, cols) {
   n <- rowSums(df[, cols, drop = FALSE])
   case_when(n == 0 ~ "none", n == 1 ~ "monoallelic", TRUE ~ "biallelic")
@@ -553,8 +556,12 @@ uncertain_vars <- names(variant_class_raw)[
   collapse_class(variant_class_raw) == "Uncertain"]
 
 # (a) Uncertain variants count toward zygosity. What if they do not?
-# Result: 4 of 13 biallelic patients depend on a VUS as their second allele.
-# 2 drop to monoallelic and 2 drop to none
+# 4 of the 13 biallelic patients depend on a VUS as their second allele, so
+# the strict biallelic group is 9.
+# TODO record where those 4 land from the count() below. Either all 4 become
+# monoallelic, or 2 become monoallelic and 2 become none. Both give n = 9, so
+# the count is the only thing that separates them, and the earlier comments
+# in this script disagreed on it.
 strict_cols <- setdiff(prf1_path_cols, uncertain_vars)
 combined %>%
   mutate(strict = zyg_from(., strict_cols)) %>%
@@ -562,110 +569,191 @@ combined %>%
   print(n = Inf)
 
 # All of the uncertain variants are heterozygous only, so none of them can
-# create a homozygous call. The four affected patients are
-# compound heterozygotes pairing one confident pathogenic allele with one VUS
+# create a homozygous call
 combined %>%
   select(patient_id, any_of(uncertain_vars)) %>%
   pivot_longer(-patient_id, names_to = "variant", values_to = "alleles") %>%
   filter(alleles > 0) %>%
   count(variant, alleles)
 
+# The strict comparison itself is run in the Stats section below, p = 3.319e-06
+
 # (b) What if A91V counted as a pathogenic allele?
 incl_a91v_cols <- union(prf1_path_cols, "c_272c_t")
+
 combined %>%
   mutate(with_a91v = zyg_from(., incl_a91v_cols)) %>%
   count(prf1_zygosity, with_a91v) %>%
   print(n = Inf)
 
+final_table_clean %>%
+  mutate(z_a91v = zyg_from(., incl_a91v_cols)) %>%
+  filter(group == "No mutation" |
+           (analysis_group == "Mutation" & z_a91v == "biallelic")) %>%
+  mutate(cmp = if_else(group == "No mutation", "No mutation", "PRF1 biallelic")) %>%
+  wilcox.test(perforin_pct ~ cmp, data = ., exact = FALSE)
+# p = 2.978e-07. Slightly stronger than the main result, conclusion unchanged
+
 # (c) What if c.1229_1230delinsCC counted as pathogenic?
 incl_delins_cols <- union(prf1_path_cols, "c_1229_1230delins_cc")
+
 combined %>%
   mutate(with_delins = zyg_from(., incl_delins_cols)) %>%
   count(prf1_zygosity, with_delins) %>%
   print(n = Inf)
-
-# ============================================================================
-# Stats
-# ============================================================================
-
-# Does perforin differ between biallelic PRF1 defects and no mutation?
-final_table_clean %>%
-  filter(group %in% c("PRF1 biallelic", "No mutation")) %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 5.491e-07, was 7.13e-07 before I reclassified c.1153C>T.
-# Biallelic PRF1 defects abolish perforin expression
-
-# Same comparison but only the 9 patients with two confidently pathogenic
-# alleles, so the result does not rest on any VUS.
-final_table_clean %>%
-  filter(group %in% c("PRF1 biallelic", "No mutation")) %>%
-  mutate(strict = zyg_from(., strict_cols)) %>%
-  filter(group == "No mutation" | strict == "biallelic") %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 3.319e-06. Same order of magnitude, so the finding is consistent
-
-# Monoallelic versus no mutation
-final_table_clean %>%
-  filter(group %in% c("PRF1 monoallelic", "No mutation")) %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 0.14572
-
-# Polymorphism versus no mutation.
-final_table_clean %>%
-  filter(group %in% c("Polymorphism", "No mutation")) %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 1.222e-08
-# Confounded by cohort. All the polymorphism carriers come from the
-# panel data and 48 of 54 no-mutation patients come from the genetics data,
-# so redo it within one cohort below
-
-final_table_clean %>%
-  filter(cohort == "data_labelled", group %in% c("Polymorphism", "No mutation")) %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 0.980
-# Within cohort there is no difference, so the pooled result was just cohort effects
-
-# Is main finding a result of cohort effects?
-final_table_clean %>%
-  filter(cohort == "data_labelled", group %in% c("PRF1 biallelic", "No mutation")) %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 0.00600, no
-
-final_table_clean %>%
-  filter(cohort == "genetics", group %in% c("PRF1 biallelic", "No mutation")) %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 0.000222
-# It replicates separately in both cohorts, so it is not a cohort effect.
-
-# Biallelic PRF1 versus patients negative across all four tested genes.
-final_table_clean %>%
-  filter(group == "PRF1 biallelic" | control_type == "Full negative") %>%
-  wilcox.test(perforin_pct ~ group, data = .)
-# p = 8.39e-10
-
-# The panel cohort was referred because of low perforin, so its mutation
-# negative patients are not a real healthy comparison group. 
 
 final_table_clean %>%
   mutate(z_delins = zyg_from(., incl_delins_cols)) %>%
   filter(group == "No mutation" |
            (analysis_group == "Mutation" & z_delins == "biallelic")) %>%
   mutate(cmp = if_else(group == "No mutation", "No mutation", "PRF1 biallelic")) %>%
-  wilcox.test(perforin_pct ~ cmp, data = .)
-# p = 2.45e-07
+  wilcox.test(perforin_pct ~ cmp, data = ., exact = FALSE)
+# p = 2.45e-07 when run without exact = FALSE. Reconfirm under the normal
+# approximation and record here. Conclusion unchanged either way
+
+# ============================================================================
+# Stats
+# ============================================================================
+
+# exact = FALSE everywhere. Perforin has heavy ties at 0, so wilcox.test was
+# already falling back to the normal approximation and only warning about it.
+# Setting it explicitly makes the methods section match what was computed.
+# The p-values below were recorded before this was applied uniformly, so
+# reconfirm each one and update both the comment and the figure, which
+# hardcodes 0.000399, 5.491e-07, 0.14572 and 0.001624.
+
+# Biallelic versus monoallelic: does one pathogenic allele reduce perforin?
+final_table_clean %>%
+  filter(group %in% c("PRF1 biallelic", "PRF1 monoallelic")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 0.000399
+
+# Does perforin differ between biallelic PRF1 defects and no mutation?
+final_table_clean %>%
+  filter(group %in% c("PRF1 biallelic", "No mutation")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 5.491e-07, was 7.13e-07 before I reclassified c.1153C>T.
+# Biallelic PRF1 defects abolish perforin expression
+
+# Same comparison but only the 9 patients with two confidently pathogenic
+# alleles, so the result does not rest on any VUS. This is sensitivity (a)
+final_table_clean %>%
+  filter(group %in% c("PRF1 biallelic", "No mutation")) %>%
+  mutate(strict = zyg_from(., strict_cols)) %>%
+  filter(group == "No mutation" | strict == "biallelic") %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 3.319e-06. Same order of magnitude, so the finding is consistent
+
+# Monoallelic versus no mutation
+final_table_clean %>%
+  filter(group %in% c("PRF1 monoallelic", "No mutation")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 0.14572
+# n = 12, so this is underpowered for a modest heterozygote shift. Report as
+# no significant difference, not as evidence of no difference
+
+# Polymorphism versus no mutation
+final_table_clean %>%
+  filter(group %in% c("Polymorphism", "No mutation")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 1.222e-08
+# Confounded by cohort. All the polymorphism carriers come from the panel
+# data and 48 of 54 no-mutation patients come from the genetics data, so
+# redo it within one cohort below
+
+final_table_clean %>%
+  filter(cohort == "data_labelled", group %in% c("Polymorphism", "No mutation")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 0.980
+# Within cohort there is no difference, so the pooled result was just cohort
+# effects
+
+# Is the main finding a result of cohort effects?
+final_table_clean %>%
+  filter(cohort == "data_labelled", group %in% c("PRF1 biallelic", "No mutation")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 0.00600, no
+
+final_table_clean %>%
+  filter(cohort == "genetics", group %in% c("PRF1 biallelic", "No mutation")) %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 0.001325
+# It replicates separately in both cohorts, so it is not a cohort effect
+
+# Biallelic PRF1 versus patients negative across all four tested genes
+final_table_clean %>%
+  filter(group == "PRF1 biallelic" | control_type == "Full negative") %>%
+  wilcox.test(perforin_pct ~ group, data = ., exact = FALSE)
+# p = 8.39e-10
+
+# ----------------------------------------------------------------------------
+# Panel B: are the two mutation-negative groups comparable controls?
+# ----------------------------------------------------------------------------
+
+# The panel cohort was referred for perforin flow cytometry on clinical
+# suspicion and sequenced for PRF1 only if that came back low, so it is
+# selected on the outcome variable. This test quantifies the ascertainment
+# effect, it does not discover it. It is also its own family, so it is not
+# Holm-adjusted with the panel A comparisons
+final_table_clean %>%
+  filter(group == "No mutation") %>%
+  wilcox.test(perforin_pct ~ cohort, data = ., exact = FALSE, conf.int = TRUE)
+# W = 29, p = 0.001624
+# Hodges-Lehmann shift -45.8%, 95% CI -59.8 to -25.0. cohort is still
+# data_labelled/genetics here, so negative means the panel cohort sits lower.
+# CI is 35 points wide at n = 6, so quote the shift as approximate
+
+# Medians and IQRs. The manuscript quotes these, and n = 6 makes the
+# panel-cohort box unstable
+final_table_clean %>%
+  filter(group == "No mutation") %>%
+  group_by(cohort) %>%
+  summarise(n = n(),
+            median = median(perforin_pct),
+            q1 = quantile(perforin_pct, 0.25),
+            q3 = quantile(perforin_pct, 0.75),
+            n_not_normal = sum(perforin_state != "Normal"),
+            .groups = "drop")
+
+# Same point as a proportion below the normal threshold. Fisher handles the
+# small cells where a chi-square would not
+final_table_clean %>%
+  filter(group == "No mutation") %>%
+  mutate(not_normal = perforin_state != "Normal") %>%
+  with(fisher.test(table(cohort, not_normal)))
+
+# Three perforin values were imputed by state average, which pulls toward the
+# centre of a group defined by the variable being tested. At n = 6 one such
+# value moves the median, so check whether any landed in the panel-cohort
+# negatives. Uses final_table because original_id is dropped in _clean
+imputed_ids <- c("91", "103", "21")
+
+final_table %>%
+  filter(group == "No mutation", cohort == "data_labelled") %>%
+  mutate(imputed = original_id %in% imputed_ids) %>%
+  select(patient_id, original_id, perforin_pct, imputed)
+
+# Rerun without them. Exclusion is scoped to the panel cohort so a GOSH MRN
+# of 21, 91 or 103 in the genetics cohort cannot be dropped by accident
+final_table %>%
+  filter(group == "No mutation",
+         !(cohort == "data_labelled" & original_id %in% imputed_ids)) %>%
+  wilcox.test(perforin_pct ~ cohort, data = ., exact = FALSE, conf.int = TRUE)
+# TODO record p and shift. If unchanged, one line in the text. If it moves,
+# panel B needs a caveat in the caption
 
 # ============================================================================
 # Plots
 # ============================================================================
 
-group_levels <- c("PRF1 biallelic", 
-                  "PRF1 monoallelic", 
+group_levels <- c("PRF1 biallelic",
+                  "PRF1 monoallelic",
                   "Sequence variance",
                   "Polymorphism",
-                  "No mutation", 
+                  "No mutation",
                   "Mutation (VUS only)",
-                  "STXBP2", 
-                  "XIAP", 
+                  "STXBP2",
+                  "XIAP",
                   "SH2D1A")
 
 perforin_levels <- c("Absent", "Abnormal", "Normal")
@@ -709,7 +797,7 @@ final_table_clean %>%
   mutate(gene = gene_lookup[variant],
          label = coalesce(variant_hgvs[variant], variant)) %>%
   ggplot(aes(reorder(label, n), n, fill = gene)) +
-  geom_col() + 
+  geom_col() +
   coord_flip() +
   labs(x = NULL, y = "Patients carrying variant") +
   theme_minimal()
@@ -723,7 +811,7 @@ final_table_clean %>%
   mutate(state = if_else(alleles == 1, "Heterozygous", "Homozygous"),
          label = coalesce(variant_hgvs[variant], variant)) %>%
   ggplot(aes(reorder(label, n), n, fill = state)) +
-  geom_col() + 
+  geom_col() +
   coord_flip() +
   labs(x = NULL, y = "Patients carrying variant", fill = NULL) +
   theme_minimal()
@@ -764,15 +852,16 @@ variant_cols <- final_table_clean %>%
   select(matches("^c_\\d")) %>%
   colnames()
 
-# Subset to carriers once and build both the matrix and the annotations from that same subset
+# Subset to carriers once and build both the matrix and the annotations from
+# that same subset
 carrier_ids <- final_table_clean$patient_id[
   rowSums(final_table_clean[, variant_cols] > 0, na.rm = TRUE) > 0]
 
-ftc_plot <- final_table_clean %>% 
+ftc_plot <- final_table_clean %>%
   filter(patient_id %in% carrier_ids)
 
-# The panel widths show the perforin distribution among
-# carriers, not the whole cohort
+# The panel widths show the perforin distribution among carriers, not the
+# whole cohort
 m <- t(as.matrix(ftc_plot[, variant_cols]))
 colnames(m) <- ftc_plot$patient_id
 
@@ -796,8 +885,8 @@ gene <- gene[ord]
 vclass <- vclass[ord]
 rownames(m) <- coalesce(variant_hgvs[kept], kept)
 
-# oncoPrint calculates percentages over the carriers only, 
-# so calculate for whole cohort
+# oncoPrint calculates percentages over the carriers only, so calculate for
+# the whole cohort
 pct_full <- sprintf("%.0f%%", 100 * rowSums(m > 0) / nrow(final_table_clean))
 
 mat_chr <- matrix(c("", "HET", "HOM")[m + 1],
@@ -836,9 +925,9 @@ perforin_cols <- c(
   "Normal" = "#1b9e77"
 )
 
-gene_cols <- c(PRF1 = "#E7298A", 
+gene_cols <- c(PRF1 = "#E7298A",
                STXBP2 = "#66A61E",
-               XIAP = "#7570B3", 
+               XIAP = "#7570B3",
                SH2D1A = "#E6AB02")
 
 top_ann <- HeatmapAnnotation(
@@ -891,7 +980,31 @@ dev.off()
 # Final figure
 # ============================================================================
 
-library(patchwork)
+# One threshold definition so both panels use identical cutoffs
+star_label <- function(p) {
+  case_when(p < 1e-4 ~ "****", p < 1e-3 ~ "***",
+            p < 1e-2 ~ "**", p < 0.05 ~ "*", TRUE ~ "ns")
+}
+
+n_lab <- function(x) data.frame(y = -6, label = paste0("n = ", length(x)))
+
+# Match group names to the x positions ggplot actually draws, then stack
+# brackets shortest-span lowest so they never cross
+brackets <- function(cmp, x_levels, base, step = 9, adjust = "holm") {
+  cmp %>%
+    mutate(p.adj = p.adjust(p, method = adjust),
+           label = star_label(p.adj),
+           xmin = match(group1, x_levels),
+           xmax = match(group2, x_levels)) %>%
+    arrange(abs(xmax - xmin)) %>%
+    mutate(y.position = base + step * (row_number() - 1))
+}
+
+stars <- function(df) {
+  list(stat_pvalue_manual(df, label = "label", tip.length = 0.01,
+                          bracket.size = 0.3, size = 3.2),
+       expand_limits(y = max(df$y.position) + 4))
+}
 
 cohort_labs <- c(data_labelled = "PRF1 panel", genetics = "Four-gene cohort")
 
@@ -899,34 +1012,59 @@ plot_df <- final_table_clean %>%
   mutate(group = factor(group, levels = group_levels),
          cohort = recode(cohort, !!!cohort_labs))
 
-n_lab <- function(x) data.frame(y = -6, label = paste0("n = ", length(x)))
+# Empty factor levels are dropped by the discrete scale, so read bracket
+# positions off what is actually plotted. No SH2D1A carriers were identified
+group_x <- levels(droplevels(plot_df$group))
+cohort_x <- sort(unique(plot_df$cohort))
+
+# Holm across the three comparisons shown in panel A
+stat_group <- tibble::tribble(
+  ~group1, ~group2, ~p,
+  "PRF1 biallelic", "PRF1 monoallelic", 0.000399,
+  "No mutation", "PRF1 biallelic", 5.491e-07,
+  "No mutation", "PRF1 monoallelic", 0.14572
+) %>%
+  brackets(group_x, base = 94)
+
+# Panel B is a separate question, so its own family and unadjusted
+stat_neg <- tibble::tibble(
+  group1 = "Four-gene cohort", group2 = "PRF1 panel", p = 0.001624
+) %>%
+  brackets(cohort_x, base = 108, adjust = "none")
+
+# Shared layers. Threshold lines come after the points so they draw on top
+common <- list(
+  geom_hline(yintercept = c(10, 50), linetype = "dashed", alpha = 0.4),
+  stat_summary(fun.data = n_lab, geom = "text", size = 2.8),
+  labs(x = NULL, y = "Perforin expression (%)"),
+  theme_minimal(base_size = 11)
+)
+
+# Lock the jitter so the figure regenerates identically
+set.seed(1)
 
 plot_group <- plot_df %>%
   add_count(group) %>%
   ggplot(aes(group, perforin_pct)) +
   geom_boxplot(data = ~ filter(.x, n >= 5), outlier.shape = NA) +
   geom_jitter(aes(colour = cohort), width = 0.15, alpha = 0.7, size = 1.6) +
-  geom_hline(yintercept = c(10, 50), linetype = "dashed", alpha = 0.4) +
-  stat_summary(fun.data = n_lab, geom = "text", size = 2.8) +
-  labs(x = NULL, y = "Perforin expression (%)", colour = "Cohort") +
-  theme(legend.text = element_text(size = 8),
-        legend.title = element_text(size = 9)) +
-  theme_minimal(base_size = 11) +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+  common +
+  stars(stat_group) +
+  labs(colour = "Cohort") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 9))
 
 plot_neg <- plot_df %>%
   filter(group == "No mutation") %>%
   ggplot(aes(cohort, perforin_pct)) +
   geom_boxplot(outlier.shape = NA, width = 0.45) +
   geom_jitter(width = 0.12, alpha = 0.7, size = 1.6) +
-  geom_hline(yintercept = c(10, 50), linetype = "dashed", alpha = 0.4) +
-  stat_summary(fun.data = n_lab, geom = "text", size = 2.8) +
-  labs(x = NULL, y = "Perforin expression (%)") +
-  theme_minimal(base_size = 11)
+  common +
+  stars(stat_neg)
 
 clinical_figure <- plot_group / plot_neg +
   plot_layout(heights = c(1.8, 1.2)) +
   plot_annotation(tag_levels = "A")
 
 ggsave("figure_perforin_by_group.png", clinical_figure, width = 8, height = 9)
-
